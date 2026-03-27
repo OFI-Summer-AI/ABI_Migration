@@ -12,11 +12,11 @@ class CelonisKPI(BaseModel):
     kpi_id: str = Field(..., description="Unique identifier")
     name: str = Field(..., description="Display name")
     pql_formula: str = Field(..., description="PQL formula/query")
-    description: Optional[str] = Field(default="", description="Description")
     record_id: str = Field(..., description="Parent record/component ID")
     attribute_type: str = Field(..., description="KPI, Attribute, or Component")
     raw_metadata: Dict[str, Any] = Field(default_factory=dict, description="Original object data")
     extracted_at: datetime = Field(default_factory=datetime.now, description="Extraction timestamp")
+    depends_on: List[str] = Field(default_factory=list, description="List of KPI IDs this formula depends on")
     
 class Config:
     json_encoders = {

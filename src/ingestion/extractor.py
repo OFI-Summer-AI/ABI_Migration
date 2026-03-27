@@ -222,14 +222,17 @@ class CelonisExtractor:
         kpi_id = str(getattr(obj, "id", ""))
         display_name = getattr(obj, "display_name", None) or getattr(obj, "name", None) or kpi_id
 
+        pql_str = str(pql).strip()
+        deps = re.findall(r'KPI\([\'"]([^\'"]+)[\'"]\)', pql_str)
+
         return CelonisKPI(
             kpi_id=kpi_id,
             name=str(display_name),
-            pql_formula=str(pql).strip(),
-            description=str(getattr(obj, "description", "")),
+            pql_formula=pql_str,
             record_id=record_id,
             attribute_type=obj_type,
-            raw_metadata={}
+            raw_metadata={},
+            depends_on=deps
         )
 
     # Legacy helper kept for backward compatibility (used nowhere now, safe to remove later).

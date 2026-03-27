@@ -120,7 +120,8 @@ def main():
         kpi_dicts = [kpi.model_dump() for kpi in result.kpis]
         
         # Save JSON
-        json_path = file_handler.save_json(kpi_dicts, "extracted_kpis.json")
+        wrapped_json = {"kpis": kpi_dicts}
+        json_path = file_handler.save_json(wrapped_json, "extracted_kpis.json")
         logger.info(f"Saved JSON: {json_path}")
         
         # Generate report
