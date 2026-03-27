@@ -15,6 +15,15 @@ KPI_CALL_RE = re.compile(r"""(?ix)
 \s*\)
 """)
 
+DIRECT_KPI_REF_RE = re.compile(r"""(?ix)
+^\s*KPI\s*\(\s*
+  (?:
+    "([^"]+)"
+    |'([^']+)'
+  )
+\s*\)\s*$
+""")
+
 
 def load_rows(path: Path) -> List[Dict[str, Any]]:
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -32,6 +41,14 @@ def extract_kpi_refs(pql: str) -> List[str]:
         if ref:
             refs.append(ref)
     return refs
+
+
+def extract_direct_nested_kpi_ref(pql: str) -> str:
+    """Return referenced KPI id only when full formula is exactly KPI('...')."""
+    m = DIRECT_KPI_REF_RE.match(pql or "")
+    if not m:
+        return ""
+    return (m.group(1) or m.group(2) or "").strip()
 
 
 def build_dependency_graph(kpi_rows: List[Dict[str, Any]]) -> Tuple[Dict[str, List[str]], Dict[str, Dict[str, Any]]]:
@@ -64,6 +81,44 @@ def build_dependency_graph(kpi_rows: List[Dict[str, Any]]) -> Tuple[Dict[str, Li
         graph[kpi_id] = deps
 
     return graph, kpi_index
+
+
+def filter_to_dependency_chains(graph: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    """
+    Keep only nodes that are part of at least one dependency chain.
+    - Start nodes: KPIs with outgoing edges.
+    - Include all reachable dependencies from those starts.
+    """
+    starts = [k for k, deps in graph.items() if deps]
+    if not starts:
+        return {}
+
+    keep: Set[str] = set()
+    stack = list(starts)
+    while stack:
+        node = stack.pop()
+        if node in keep:
+            continue
+        keep.add(node)
+        for dep in graph.get(node, []):
+            if dep not in keep:
+                stack.append(dep)
+
+    return {k: [d for d in graph.get(k, []) if d in keep] for k in keep}
+
+
+def build_paths_from(node: str, graph: Dict[str, List[str]], path: List[str], out: List[List[str]], seen: Set[str]) -> None:
+    if node in seen:
+        out.append(path + [f"[CYCLE:{node}]"])
+        return
+    deps = graph.get(node, [])
+    if not deps:
+        out.append(path + [node])
+        return
+    seen2 = set(seen)
+    seen2.add(node)
+    for dep in deps:
+        build_paths_from(dep, graph, path + [node], out, seen2)
 
 
 def invert_graph(graph: Dict[str, List[str]]) -> Dict[str, List[str]]:
@@ -195,25 +250,45 @@ def main() -> None:
 
     rows = load_rows(in_path)
     graph, kpi_index = build_dependency_graph(rows)
-    rev = invert_graph(graph)
+    chain_graph = filter_to_dependency_chains(graph)
+    rev = invert_graph(chain_graph)
+
+    nested_kpis = sorted(
+        [
+            kpi_id
+            for kpi_id, row in kpi_index.items()
+            if extract_direct_nested_kpi_ref(str(row.get("pql_formula", "") or ""))
+        ]
+    )
 
     # Helpful labels: "KPI Name (kpi_id)"
-    labels = {k: f"{kpi_index[k].get('name', '')} ({k})".strip() for k in graph.keys()}
+    labels = {k: f"{kpi_index[k].get('name', '')} ({k})".strip() for k in chain_graph.keys()}
 
-    order, cycles = topo_sort_or_cycles(graph)
+    order, cycles = topo_sort_or_cycles(chain_graph)
 
     # Nodes with no dependencies and nodes depended-on by others
-    roots = sorted([k for k, deps in graph.items() if not deps])
-    leaves = sorted([k for k in graph.keys() if k not in rev])
+    roots = sorted([k for k, deps in chain_graph.items() if not deps])
+    leaves = sorted([k for k in chain_graph.keys() if k not in rev])
+
+    nested_dependency_paths: Dict[str, List[str]] = {}
+    for nk in nested_kpis:
+        if nk not in chain_graph:
+            continue
+        paths: List[List[str]] = []
+        build_paths_from(nk, chain_graph, [], paths, set())
+        nested_dependency_paths[nk] = [" -> ".join(p) for p in paths]
 
     summary = {
-        "total_kpis": len(graph),
-        "total_edges": sum(len(v) for v in graph.values()),
+        "total_kpis_in_input": len(graph),
+        "total_kpis_in_dependency_chains": len(chain_graph),
+        "total_edges_in_dependency_chains": sum(len(v) for v in chain_graph.values()),
+        "nested_kpis_direct_format": nested_kpis,
+        "nested_dependency_paths": nested_dependency_paths,
         "roots_no_dependencies": roots,
         "leaves_no_dependents": leaves,
         "topological_order_partial": order,
         "cycles": cycles,
-        "graph": graph,
+        "graph": chain_graph,
         "dependents": rev,
     }
 
@@ -222,12 +297,14 @@ def main() -> None:
         encoding="utf-8",
     )
     (out_dir / "kpi_dependency_graph.dot").write_text(
-        to_dot(graph, labels),
+        to_dot(chain_graph, labels),
         encoding="utf-8",
     )
 
-    print(f"KPIs: {summary['total_kpis']}")
-    print(f"Edges: {summary['total_edges']}")
+    print(f"Input KPIs: {summary['total_kpis_in_input']}")
+    print(f"KPIs in dependency chains: {summary['total_kpis_in_dependency_chains']}")
+    print(f"Edges in dependency chains: {summary['total_edges_in_dependency_chains']}")
+    print(f"Nested KPIs (direct KPI('...') format): {len(nested_kpis)}")
     print(f"Roots (no deps): {len(roots)}")
     print(f"Leaves (no dependents): {len(leaves)}")
     if cycles:
