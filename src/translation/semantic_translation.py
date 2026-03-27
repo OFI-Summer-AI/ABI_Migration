@@ -68,7 +68,12 @@ class PQLExplainer:
                     "You explain Celonis PQL formulas in plain English for business users. "
                     "Return exactly one sentence. "
                     "Be explicit about operation (sum/count/avg/etc), table, and column names. "
-                    "Do not include markdown, bullets, or code fences."
+                    "Do not include markdown, bullets, or code fences. "
+                    "Prefer semantic wording over mechanical wording: for indicator-style expressions "
+                    "like SUM(CASE WHEN <condition> THEN 1 ELSE 0 END), describe them as "
+                    "'count of rows/records meeting the condition' instead of 'sum of 1 and 0'. "
+                    "More generally, when CASE emits indicator values (1/0, true/false flags), "
+                    "explain the business intent (count/rate/share of matching records)."
                 )
             ),
             HumanMessage(
@@ -77,7 +82,9 @@ class PQLExplainer:
                     f"{dependency_block}"
                     "Example style:\n"
                     'Input: SUM("Book"."PageCount")\n'
-                    'Output: Calculate the total sum of the "PageCount" column from the "Book" table.\n\n'
+                    'Output: Calculate the total sum of the "PageCount" column from the "Book" table.\n'
+                    "Input: SUM(CASE WHEN \"Sales\".\"IsValid\" = 'Y' THEN 1 ELSE 0 END)\n"
+                    "Output: Count the number of records in the Sales table where IsValid equals 'Y'.\n\n"
                     "Now explain the given PQL."
                 )
             ),
