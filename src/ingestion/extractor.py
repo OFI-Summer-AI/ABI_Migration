@@ -1,4 +1,7 @@
+import os
 import re
+import sys
+import io
 import pandas as pd
 from typing import Any, Optional
 from tqdm import tqdm
@@ -9,13 +12,16 @@ from ..utils.logger import get_logger
 # Extractor class to handle KPI, transformation, and data model extraction logic.
 class CelonisExtractor:
     # Initialize with a CelonisConnector and identifiers for space and package.
-    def __init__(self, connector: CelonisConnector, space_id: str, package_id: str):
+    def __init__(self, connector: CelonisConnector, space_id: str, package_id: str, quiet: bool = False):
         if not space_id or not package_id:
             raise ValueError("space_id and package_id are required")
         self.connector = connector
         self.space_id = space_id
         self.package_id = package_id
         self.logger = get_logger(__name__)
+        # When quiet=True, suppress tqdm progress bars (caller provides its own UI)
+        self._tqdm_file = open(os.devnull, "w") if quiet else sys.stderr
+        self._quiet = quiet
 
     # Extract KPIs, Filters, and Attributes from a Knowledge Model via get_content().
     def extract_from_knowledge_model(self, km_id: str) -> ExtractionResult:
@@ -35,7 +41,7 @@ class CelonisExtractor:
             # 1. Top-level KPIs
             kpi_list = list(content.kpis or [])
             self.logger.info(f"Found {len(kpi_list)} top-level KPIs in content")
-            for kpi in tqdm(kpi_list, desc="KPIs"):
+            for kpi in tqdm(kpi_list, desc="KPIs", file=self._tqdm_file, disable=self._quiet):
                 if kpi is None:
                     continue
                 obj = self._build_kpi_from_metadata(kpi, "KPI", record_id="knowledge_model")
@@ -45,7 +51,7 @@ class CelonisExtractor:
             # 2. Top-level Filters
             filter_list = list(content.filters or [])
             self.logger.info(f"Found {len(filter_list)} top-level Filters in content")
-            for f in tqdm(filter_list, desc="Filters"):
+            for f in tqdm(filter_list, desc="Filters", file=self._tqdm_file, disable=self._quiet):
                 if f is None:
                     continue
                 obj = self._build_kpi_from_metadata(f, "Filter", record_id="knowledge_model")
@@ -55,7 +61,7 @@ class CelonisExtractor:
             # 3. Attributes inside Records (most PQL formulas live here)
             record_list = list(content.records or [])
             self.logger.info(f"Found {len(record_list)} Records — extracting Attributes")
-            for record in tqdm(record_list, desc="Records"):
+            for record in tqdm(record_list, desc="Records", file=self._tqdm_file, disable=self._quiet):
                 if record is None:
                     continue
                 record_id = getattr(record, "id", "unknown_record")
@@ -89,7 +95,7 @@ class CelonisExtractor:
         try:
             pool = self.connector.get_data_pool(pool_name)
 
-            for job in tqdm(pool.get_jobs(), desc="Jobs"):
+            for job in tqdm(pool.get_jobs(), desc="Jobs", file=self._tqdm_file, disable=self._quiet):
                 for task in job.get_tasks():
                     result.add_transformation(self._build_transformation(job, task))
 
@@ -102,11 +108,12 @@ class CelonisExtractor:
 
         return result
 
-    def extract_from_data_model(self, data_model_id: str, use_chunking: bool = False, chunksize: int = 10000) -> DataModelExtractionResult:
+    def extract_from_data_model(self, data_model_id: str, table_names: Optional[list[str]] = None, use_chunking: bool = False, chunksize: int = 10000) -> DataModelExtractionResult:
         """
         Extract metadata and data from a Celonis Data Model.
         Args:
             data_model_id: ID of the data model to extract from
+            table_names: Optional list of table names to filter metadata extraction
             use_chunking: Whether to use chunking for large datasets (>1GB)
             chunksize: Number of rows per chunk if chunking is enabled
             
@@ -115,20 +122,21 @@ class CelonisExtractor:
         """
         self.logger.info(f"Extracting Data Model: {data_model_id}")
         
+        # Initialize result early to avoid UnboundLocalError in 'except'
+        result = DataModelExtractionResult(
+            data_model_id=data_model_id,
+            data_model_name="Unknown"
+        )
+        
         try:
             # Get data model
             datamodel = self.connector.get_data_model(data_model_id)
             self.logger.info(f"Connected to Data Model: {datamodel.name}")
-            
-            # Initialize result
-            result = DataModelExtractionResult(
-                data_model_id=data_model_id,
-                data_model_name=datamodel.name
-            )
+            result.data_model_name = datamodel.name
             
             # Extract table metadata
             self.logger.info("Extracting table metadata...")
-            self._extract_table_metadata(datamodel, result)
+            self._extract_table_metadata(datamodel, result, table_names=table_names)
             
             result.finalize()
             self.logger.info(f"Data Model extraction complete. Tables: {result.table_count}")
@@ -213,6 +221,60 @@ class CelonisExtractor:
             self.logger.error(f"Data extraction with PQL failed: {e}")
             raise
 
+    def extract_table_data(self, data_model_id: str, table_name: str, use_chunking: bool = False, chunksize: int = 10000) -> pd.DataFrame:
+        """
+        Extract all data from a specific table in a Data Model.
+        
+        Args:
+            data_model_id: ID of the data model
+            table_name: Name of the table to extract
+            use_chunking: Whether to use chunking
+            chunksize: Rows per chunk
+            
+        Returns:
+            DataFrame containing table data
+        """
+        self.logger.info(f"Extracting table data: {table_name} from Data Model: {data_model_id}")
+        
+        try:
+            # Import PQL components
+            from pycelonis.pql import PQL, PQLColumn
+            
+            # Get data model
+            datamodel = self.connector.get_data_model(data_model_id)
+            
+            # Get table object
+            tables = self._safe_get_tables(datamodel)
+            table_obj = next((t for t in tables if getattr(t, "name", getattr(t, "id", "")) == table_name), None)
+            
+            if not table_obj:
+                raise ValueError(f"Table '{table_name}' not found in Data Model")
+            
+            # Build query for all columns
+            columns = self._safe_get_columns(table_obj)
+            if not columns:
+                 # Fallback if we can't get column metadata
+                 self.logger.warning(f"Could not retrieve column metadata for {table_name}, attempting generic query.")
+                 q = PQL() # This might or might not work depending on DM config
+            else:
+                q = PQL()
+                for col in columns:
+                    # Celonis PQL format: "Table"."Column"
+                    pql_expr = f'"{table_name}"."{col}"'
+                    q.add(PQLColumn(query=pql_expr, name=col))
+            
+            # Execute
+            if use_chunking:
+                df = datamodel.get_data_frame(q, chunksize=chunksize)
+            else:
+                df = datamodel.get_data_frame(q)
+                
+            return df
+            
+        except Exception as e:
+            self.logger.error(f"Failed to extract table data for {table_name}: {e}")
+            raise
+
     # Helper to build CelonisKPI from any KpiMetadata / FilterMetadata / AttributeMetadata object.
     def _build_kpi_from_metadata(self, obj: Any, obj_type: str, record_id: str = "knowledge_model") -> Optional[CelonisKPI]:
         pql = getattr(obj, "pql", None)
@@ -258,9 +320,11 @@ class CelonisExtractor:
             try:
                 value = getattr(task, attr, None)
                 if callable(value):
-                    return value()
-                elif value:
-                    return value
+                    res = value()
+                    if res is not None:
+                        return str(res)
+                elif value is not None:
+                    return str(value)
             except Exception:
                 return "[[ HIDDEN OR ERROR ]]"
         return ""
@@ -273,19 +337,24 @@ class CelonisExtractor:
         matches = re.findall(r'(?i)(?:FROM|JOIN)\s+\w+\.?(\w+)', sql)
         return ", ".join(sorted(set(m.upper() for m in matches))) or "N/A"
     
-    def _extract_table_metadata(self, datamodel: Any, result: DataModelExtractionResult):
+    def _extract_table_metadata(self, datamodel: Any, result: DataModelExtractionResult, table_names: Optional[list[str]] = None):
         """
         Extract metadata about tables in the data model.
         
         Args:
             datamodel: Celonis data model object
             result: DataModelExtractionResult to populate
+            table_names: Optional list of table names to filter for
         """
         try:
         # Try to get tables from data model
             tables = self._safe_get_tables(datamodel)
             
-            for table in tqdm(tables, desc="Tables"):
+            # Filter tables if names provided
+            if table_names:
+                tables = [t for t in tables if getattr(t, "name", getattr(t, "id", "")) in table_names]
+            
+            for table in tqdm(tables, desc="Tables", file=self._tqdm_file, disable=self._quiet):
                 table_info = self._build_table_info(table)
                 if table_info:
                     result.add_table(table_info)

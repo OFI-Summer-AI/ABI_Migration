@@ -28,6 +28,7 @@ class Settings(BaseSettings):
 
     # Add to your Settings class
     data_model_id: Optional[str] = Field(None, description="Data Model ID")
+    data_model_tables: Optional[str] = Field(None, description="Comma-separated tables to extract")
     data_pool_name: Optional[str] = Field(None, description="Data Pool Name")
     data_pool_id: Optional[str] = Field(None, description="Data Pool ID")
     
@@ -60,6 +61,14 @@ class Settings(BaseSettings):
             v = f"https://{v}"
         if not (".celonis.cloud" in v or ".celonis.eu" in v):
             raise ValueError("URL must be a valid Celonis cloud URL")
+        return v
+    
+    @field_validator("celonis_api_token", "data_model_id", "data_pool_id", "data_model_tables")
+    @classmethod
+    def strip_strings(cls, v: Optional[str]) -> Optional[str]:
+        """Strip whitespace if value is a string."""
+        if isinstance(v, str):
+            return v.strip()
         return v
     
     @field_validator("output_dir", "log_dir")

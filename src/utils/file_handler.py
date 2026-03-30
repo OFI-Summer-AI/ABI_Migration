@@ -62,6 +62,21 @@ class FileHandler:
         df.to_csv(filepath, index=False, encoding="utf-8")
         
         return filepath
+
+    def save_dataframe(self, df: pd.DataFrame, filename: str) -> Path:
+        """
+        Save a pandas DataFrame to CSV.
+        
+        Args:
+            df: DataFrame to save
+            filename: Target filename
+            
+        Returns:
+            Path to saved file
+        """
+        filepath = self.output_dir / filename
+        df.to_csv(filepath, index=False, encoding="utf-8")
+        return filepath
     
     def load_json(self, filename: str) -> List[Dict[str, Any]]:
         """

@@ -32,8 +32,9 @@ def get_logger(name: str, log_dir: Path = Path("./logs"), level: str = "INFO") -
         datefmt="%Y-%m-%d %H:%M:%S"
     )
     
-    # Console handler
+    # Console handler — only show warnings and above to keep terminal clean
     console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.WARNING)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     

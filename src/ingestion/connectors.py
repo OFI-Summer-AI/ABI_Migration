@@ -78,16 +78,30 @@ class CelonisConnector:
     
     # Get data model by ID or name.
     def get_data_model(self, data_model_id: str):
+        data_model_id = data_model_id.strip()
         if not self._celonis:
             self.connect()
+        
+        # 1. Try to search all pools for the model
         try:
-            # Try to find by ID or name
-            datamodel = self._celonis.datamodels.find(data_model_id)
-            if not datamodel:
-                raise ValueError(f"Data Model '{data_model_id}' not found")
-            return datamodel
+            pools = self._celonis.data_integration.get_data_pools()
+            for pool in pools:
+                try:
+                    dms = pool.get_data_models()
+                    # Explicit ID check
+                    for dm in dms:
+                        if dm.id == data_model_id:
+                            return dm
+                    # Fallback to find (for names)
+                    dm = dms.find(data_model_id)
+                    if dm:
+                        return dm
+                except:
+                    continue
         except Exception as e:
-            raise ValueError(f"Failed to get data model '{data_model_id}': {e}")
+            self.logger.debug(f"Search in all pools failed: {e}")
+            
+        raise ValueError(f"Failed to find Data Model '{data_model_id}' in any accessible pool.")
     
     # Test connection by trying to access spaces.
     def test_connection(self) -> bool:
