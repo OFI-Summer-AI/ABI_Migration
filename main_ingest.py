@@ -128,9 +128,6 @@ def init_pipeline():
 
     return settings, logger, connector
 
-
-# ─── Phase 2: KPI Extraction ─────────────────────────────────────────────────
-
 def run_kpi_extraction(settings, logger, connector):
     """Extract KPIs from a Knowledge Model (or legacy View)."""
     print(header("KPI EXTRACTION"))
