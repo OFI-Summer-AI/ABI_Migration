@@ -10,6 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 # Load environment variables
 load_dotenv()
 
+# Pydantic models for structured output
 class TranslatedKPI(BaseModel):
     kpi_id: str
     name: str
@@ -20,9 +21,11 @@ class TranslatedKPI(BaseModel):
         description="A simple, plain English description of what this KPI or attribute measures."
     )
 
+# List of translated KPIs
 class TranslatedKPIList(BaseModel):
     kpis: List[TranslatedKPI]
 
+# Translate KPIs
 def translate_kpis(input_filepath: str, output_filepath: str):
     print(f"Loading KPIs from {input_filepath}...")
     with open(input_filepath, 'r', encoding='utf-8') as f:
@@ -57,11 +60,13 @@ Output the result as a list of translated KPIs using the provided schema.
 Ensure the SQL is accurate and ready to be executed against a standard SQL database.
 """
 
+    # Create a prompt template
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
         ("human", "Here are the extracted KPIs:\n\n{kpis}")
     ])
 
+    # Create a chain
     chain = prompt | structured_llm
 
     print("Sending data to Groq LLM for translation and dependency resolution...")

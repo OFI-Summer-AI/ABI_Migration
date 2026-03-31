@@ -108,6 +108,7 @@ class CelonisExtractor:
 
         return result
 
+    # Extract data model metadata and data from a Data Model.
     def extract_from_data_model(self, data_model_id: str, table_names: Optional[list[str]] = None, use_chunking: bool = False, chunksize: int = 10000) -> DataModelExtractionResult:
         """
         Extract metadata and data from a Celonis Data Model.
@@ -148,6 +149,7 @@ class CelonisExtractor:
         
         return result
     
+    # Extract actual data from a Celonis Data Model using PQL.
     def extract_data_from_model(self, data_model_id: str, use_chunking: bool = False, chunksize: int = 10000) -> pd.DataFrame:
         """
         Extract actual data from a Celonis Data Model using PQL.
@@ -187,6 +189,7 @@ class CelonisExtractor:
             self.logger.error(f"Data extraction failed: {e}")
             raise
     
+    # Extract data from a Data Model using a custom PQL query.
     def extract_data_with_pql(self, data_model_id: str, pql_query: Any, use_chunking: bool = False, chunksize: int = 10000) -> pd.DataFrame:
         """
         Extract data from a Celonis Data Model using a custom PQL query.
@@ -221,6 +224,7 @@ class CelonisExtractor:
             self.logger.error(f"Data extraction with PQL failed: {e}")
             raise
 
+    # Extract all data from a specific table in a Data Model.
     def extract_table_data(self, data_model_id: str, table_name: str, use_chunking: bool = False, chunksize: int = 10000) -> pd.DataFrame:
         """
         Extract all data from a specific table in a Data Model.
@@ -337,6 +341,7 @@ class CelonisExtractor:
         matches = re.findall(r'(?i)(?:FROM|JOIN)\s+\w+\.?(\w+)', sql)
         return ", ".join(sorted(set(m.upper() for m in matches))) or "N/A"
     
+    # Helper to extract table metadata from a data model.
     def _extract_table_metadata(self, datamodel: Any, result: DataModelExtractionResult, table_names: Optional[list[str]] = None):
         """
         Extract metadata about tables in the data model.
@@ -364,6 +369,7 @@ class CelonisExtractor:
             self.logger.warning(f"Could not extract detailed table metadata: {e}")
             result.errors.append(f"Table metadata extraction: {e}")
     
+    # Helper to safely get tables from a data model.
     def _safe_get_tables(self, datamodel: Any) -> list:
         """
         Safely attempt to get tables from a data model.
@@ -386,6 +392,7 @@ class CelonisExtractor:
         self.logger.warning("Could not retrieve tables from data model")
         return []
     
+    # Helper to build DataModelTableInfo from a table object.
     def _build_table_info(self, table: Any) -> Optional[DataModelTableInfo]:
         """
         Build DataModelTableInfo from a table object.
@@ -411,6 +418,7 @@ class CelonisExtractor:
             self.logger.warning(f"Failed to build table info: {e}")
             return None
     
+    # Helper to safely get column names from a table.
     def _safe_get_columns(self, table: Any) -> list:
         """
         Safely attempt to get column names from a table.
@@ -428,6 +436,7 @@ class CelonisExtractor:
                 continue
         return []
     
+    # Helper to safely get row count from a table.
     def _safe_get_row_count(self, table: Any) -> Optional[int]:
         """
         Safely attempt to get row count from a table.

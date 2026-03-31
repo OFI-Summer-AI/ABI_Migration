@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 
+# Set UTF-8 encoding for stdout.
 sys.stdout.reconfigure(encoding='utf-8')
 
 # Add project root to path
@@ -14,9 +15,7 @@ from src.ingestion.models import ExtractionResult, DataModelExtractionResult
 from src.utils.logger import get_logger
 from src.utils.file_handler import FileHandler
 
-
-# ─── Terminal Formatting Helpers ──────────────────────────────────────────────
-
+# ANSI escape codes for styled terminal output.
 class TermStyle:
     """ANSI escape codes for styled terminal output."""
     RESET   = "\033[0m"
@@ -33,12 +32,14 @@ class TermStyle:
 
 S = TermStyle
 
+# Banner for the terminal output.
 BANNER = f"""
 {S.CYAN}{S.BOLD}+--------------------------------------------------------------+
 |               CELONIS  DATA  EXTRACTION  TOOL               |
 +--------------------------------------------------------------+{S.RESET}
 """
 
+# Section header with ASCII characters.
 def header(title: str) -> str:
     """Section header with ASCII characters."""
     width = 60
@@ -49,30 +50,38 @@ def header(title: str) -> str:
         f"{S.CYAN}+{line}+{S.RESET}"
     )
 
+# Step indicator with ASCII characters.
 def step(icon: str, msg: str):
     """Print a step indicator."""
     print(f"  {icon}  {msg}")
 
+# Step indicator with OK status.
 def step_ok(msg: str):
     step(f"{S.GREEN}[OK]{S.RESET}", msg)
 
+# Step indicator with INFO status.
 def step_info(msg: str):
     step(f"{S.CYAN}[INFO]{S.RESET}", msg)
 
+# Step indicator with WARNING status.
 def step_warn(msg: str):
     step(f"{S.YELLOW}[WARN]{S.RESET}", f"{S.YELLOW}{msg}{S.RESET}")
 
+# Step indicator with FAIL status.
 def step_fail(msg: str):
     step(f"{S.RED}[FAIL]{S.RESET}", f"{S.RED}{msg}{S.RESET}")
 
+# Key-value pair printer.
 def kv(key: str, value, indent: int = 6):
     """Print a key-value pair with consistent alignment."""
     pad = " " * indent
     print(f"{pad}{S.DIM}{key:<20}{S.RESET} {value}")
 
+# Divider printer.
 def divider():
     print(f"  {S.DIM}{'-' * 56}{S.RESET}")
 
+# Results box printer.
 def result_box(title: str, rows: list[tuple[str, str]]):
     """Print a compact results box."""
     width = 56
@@ -85,9 +94,7 @@ def result_box(title: str, rows: list[tuple[str, str]]):
         print(f"  {S.GREEN}|{S.RESET}{content:<{width}}{S.GREEN}|{S.RESET}")
     print(f"  {S.GREEN}+{line}+{S.RESET}")
 
-
-# ─── Phase 1: Configuration & Connection ─────────────────────────────────────
-
+# Initialize pipeline.
 def init_pipeline():
     """Load settings, create logger, connect to Celonis. Returns (settings, logger, connector)."""
     print(header("CONFIGURATION"))
@@ -128,6 +135,7 @@ def init_pipeline():
 
     return settings, logger, connector
 
+# KPI Extraction 
 def run_kpi_extraction(settings, logger, connector):
     """Extract KPIs from a Knowledge Model (or legacy View)."""
     print(header("KPI EXTRACTION"))
@@ -182,13 +190,12 @@ def run_kpi_extraction(settings, logger, connector):
     ])
     return result
 
-
-# ─── Phase 3: Transformation Extraction ──────────────────────────────────────
-
+# Transformation Extraction
 def run_transformation_extraction(settings, logger, connector):
     """Extract SQL transformations from a Data Pool."""
     print(header("TRANSFORMATION EXTRACTION"))
-
+    
+    # Initialize
     extractor = CelonisExtractor(connector, space_id=settings.space_id, package_id=settings.package_id, quiet=True)
     file_handler = FileHandler(settings.output_dir)
 
@@ -240,8 +247,7 @@ def run_transformation_extraction(settings, logger, connector):
     return result
 
 
-# ─── Phase 4: Data Model Extraction ──────────────────────────────────────────
-
+# Data Model Extraction
 def run_data_model_extraction(settings, logger, connector):
     """Extract metadata (and optionally data) from a Data Model."""
     print(header("DATA MODEL EXTRACTION"))
@@ -289,6 +295,7 @@ def run_data_model_extraction(settings, logger, connector):
         }
         json_path = file_handler.save_json(metadata, "data_model_metadata.json")
 
+        # Generate report
         report_path = Path(settings.output_dir) / f"data_model_report_{file_handler.timestamp}.txt"
         with open(report_path, "w") as f:
             f.write("=" * 60 + "\n")
@@ -345,6 +352,7 @@ def run_data_model_extraction(settings, logger, connector):
 
     return result
 
+# Orchestration
 def run_pipeline(kpis=True, transformations=True, data_model=False):
     """Orchestrate the full pipeline with clean output."""
     print(BANNER)
@@ -370,7 +378,7 @@ def run_pipeline(kpis=True, transformations=True, data_model=False):
     print(f"  {S.GREEN}{S.BOLD}ALL DONE{S.RESET}  –  Extracted: {', '.join(phases_run)}")
     print(f"{S.CYAN}{S.BOLD}{'─' * 62}{S.RESET}\n")
 
-
+# Main execution
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         command = sys.argv[1]

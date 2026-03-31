@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-
+# get_logger function to configure and return a logger.
 def get_logger(name: str, log_dir: Path = Path("./logs"), level: str = "INFO") -> logging.Logger:
     """
     Configure and return a logger with file and console handlers.

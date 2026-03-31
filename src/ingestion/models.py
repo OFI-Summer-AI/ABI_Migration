@@ -17,12 +17,14 @@ class CelonisKPI(BaseModel):
     raw_metadata: Dict[str, Any] = Field(default_factory=dict, description="Original object data")
     extracted_at: datetime = Field(default_factory=datetime.now, description="Extraction timestamp")
     depends_on: List[str] = Field(default_factory=list, description="List of KPI IDs this formula depends on")
-    
+
+# Config class for JSON encoders.
 class Config:
     json_encoders = {
         datetime: lambda v: v.isoformat()
     }
 
+# ExtractionResult class to store extraction results.
 class ExtractionResult(BaseModel):
     """
     Container for extraction results with statistics.
@@ -34,7 +36,8 @@ class ExtractionResult(BaseModel):
     errors: List[str] = Field(default_factory=list)
     started_at: datetime = Field(default_factory=datetime.now)
     completed_at: Optional[datetime] = None
-        
+
+    # Add KPI and update statistics.
     def add_kpi(self, kpi: CelonisKPI):
         """Add KPI and update statistics."""
         self.kpis.append(kpi)
@@ -46,6 +49,7 @@ class ExtractionResult(BaseModel):
         # Update record count
         self.by_record[kpi.record_id] = self.by_record.get(kpi.record_id, 0) + 1
     
+    # Mark extraction as complete.
     def finalize(self):
         """Mark extraction as complete."""
         self.completed_at = datetime.now()
@@ -56,7 +60,7 @@ class ExtractionResult(BaseModel):
         end = self.completed_at or datetime.now()
         return (end - self.started_at).total_seconds()
 
-
+# CelonisTransformation class to store transformation results.
 class CelonisTransformation(BaseModel):
     """
     Represents a single Transformation extracted from Celonis Data Pool.
@@ -67,12 +71,14 @@ class CelonisTransformation(BaseModel):
     status: str = Field(default="Success", description="Extraction status")
     raw_sql: str = Field(default="", description="SQL transformation code")
     extracted_at: datetime = Field(default_factory=datetime.now, description="Extraction timestamp")
-    
+
+# Config class for JSON encoders.
 class Config:
     json_encoders = {
         datetime: lambda v: v.isoformat()
     }
 
+# TransformationExtractionResult class to store transformation extraction results.
 class TransformationExtractionResult(BaseModel):
     """
     Container for transformation extraction results with statistics.
@@ -107,7 +113,7 @@ class TransformationExtractionResult(BaseModel):
         end = self.completed_at or datetime.now()
         return (end - self.started_at).total_seconds()
 
-
+# DataModelTableInfo class to store metadata about a table in a data model.
 class DataModelTableInfo(BaseModel):
     """
     Represents metadata about a table in a data model.
@@ -118,12 +124,14 @@ class DataModelTableInfo(BaseModel):
     columns: List[str] = Field(default_factory=list, description="List of column names")
     description: Optional[str] = Field(default="", description="Table description")
     extracted_at: datetime = Field(default_factory=datetime.now, description="Extraction timestamp")
-    
+
+# Config class for JSON encoders.
 class Config:
     json_encoders = {
         datetime: lambda v: v.isoformat()
     }
 
+# DataModelExtractionResult class to store data model extraction results.
 class DataModelExtractionResult(BaseModel):
     """
     Container for data model extraction results.
@@ -139,6 +147,7 @@ class DataModelExtractionResult(BaseModel):
     completed_at: Optional[datetime] = None
     data_file_path: Optional[str] = Field(default=None, description="Path to saved data file")
 
+    # Add table info and update statistics.
     def add_table(self, table_info: DataModelTableInfo):
         """Add table info and update statistics."""
         self.tables.append(table_info)
@@ -147,6 +156,7 @@ class DataModelExtractionResult(BaseModel):
         if table_info.row_count:
             self.total_rows += table_info.row_count
 
+    # Mark extraction as complete.
     def finalize(self):
         """Mark extraction as complete."""
         self.completed_at = datetime.now()

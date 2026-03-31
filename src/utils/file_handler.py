@@ -6,20 +6,20 @@ import csv
 from pathlib import Path
 from typing import List, Dict, Any
 from datetime import datetime
-
 import pandas as pd
 
-
+# FileHandler class to handle saving and loading of extraction data.
 class FileHandler:
     """
     Handles saving and loading of extraction data.
     """
-    
+    # Initialize with an output directory and timestamp.
     def __init__(self, output_dir: Path):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
+    # Save data to JSON file with timestamp.
     def save_json(self, data: List[Dict[str, Any]], filename: str = None) -> Path:
         """
         Save data to JSON file with timestamp.
@@ -41,6 +41,7 @@ class FileHandler:
         
         return filepath
     
+    # Save data to CSV file with timestamp.
     def save_csv(self, data: List[Dict[str, Any]], filename: str = None) -> Path:
         """
         Save data to CSV file with timestamp.
@@ -63,6 +64,7 @@ class FileHandler:
         
         return filepath
 
+    # Save a pandas DataFrame to CSV.
     def save_dataframe(self, df: pd.DataFrame, filename: str) -> Path:
         """
         Save a pandas DataFrame to CSV.
@@ -78,6 +80,7 @@ class FileHandler:
         df.to_csv(filepath, index=False, encoding="utf-8")
         return filepath
     
+    # Load data from JSON file.
     def load_json(self, filename: str) -> List[Dict[str, Any]]:
         """
         Load data from JSON file.
@@ -93,6 +96,7 @@ class FileHandler:
         with open(filepath, "r", encoding="utf-8") as f:
             return json.load(f)
     
+    # Generate a summary report of extraction.
     def generate_report(self, stats: Dict[str, Any]) -> Path:
         """
         Generate a summary report of extraction.
