@@ -101,3 +101,56 @@ class FileHandler:
             f.write("=" * 60 + "\n")
         
         return report_file
+
+    def generate_kpi_breakdown_report(
+        self,
+        kpi_dicts: List[Dict[str, Any]],
+        filename: str = None,
+    ) -> Path:
+        """
+        Generate a readable breakdown report of extracted KPI items.
+        Items are separated by `attribute_type` into KPI / Filter / Attribute.
+        """
+        if filename is None:
+            filename = f"kpi_breakdown_report_{self.timestamp}.txt"
+
+        report_file = self.output_dir / filename
+
+        by_type: Dict[str, List[Dict[str, Any]]] = {"KPI": [], "Filter": [], "Attribute": []}
+        for item in kpi_dicts:
+            t = str(item.get("attribute_type", "") or "")
+            # Normalize some common variations
+            if t.lower() == "kpi":
+                by_type["KPI"].append(item)
+            elif t.lower() == "filter":
+                by_type["Filter"].append(item)
+            elif t.lower() == "attribute":
+                by_type["Attribute"].append(item)
+
+        with open(report_file, "w", encoding="utf-8") as f:
+            f.write("=" * 80 + "\n")
+            f.write("CELONIS KPI EXTRACTION BREAKDOWN\n")
+            f.write("=" * 80 + "\n")
+            f.write(f"Timestamp: {self.timestamp}\n")
+            f.write("\n")
+
+            for section in ["KPI", "Filter", "Attribute"]:
+                items = by_type[section]
+                f.write(f"--- {section} ({len(items)} items) ---\n")
+                for it in items:
+                    kpi_id = it.get("kpi_id", "") or ""
+                    name = it.get("name", "") or ""
+                    record_id = it.get("record_id", "") or ""
+                    pql = it.get("pql_formula", "") or ""
+
+                    # Avoid extremely long lines, but still keep the core PQL visible.
+                    pql_single_line = str(pql).replace("\n", " ").strip()
+                    if len(pql_single_line) > 250:
+                        pql_single_line = pql_single_line[:247] + "..."
+
+                    f.write(f"- {name} | kpi_id={kpi_id} | record_id={record_id}\n")
+                    if pql_single_line:
+                        f.write(f"  pql: {pql_single_line}\n")
+                f.write("\n")
+
+        return report_file

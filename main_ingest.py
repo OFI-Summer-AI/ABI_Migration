@@ -21,7 +21,7 @@ def print_results(result: ExtractionResult, output_files: dict):
     print("EXTRACTION COMPLETE")
     print("=" * 60)
     print(f"Duration:      {result.duration_seconds:.2f} seconds")
-    print(f"Total KPIs:    {result.total_count}")
+    print(f"Total Extractions:    {result.total_count}")
     print(f"By Type:       {result.by_type}")
     print("-" * 60)
     print("Output Files:")
@@ -131,10 +131,12 @@ def main():
             "duration": result.duration_seconds
         }
         report_path = file_handler.generate_report(stats)
+        breakdown_report_path = file_handler.generate_kpi_breakdown_report(kpi_dicts)
         
         output_files = {
             "JSON": json_path,
-            "Report": report_path
+            "Report": report_path,
+            "Breakdown Report": breakdown_report_path,
         }
         
         print_results(result, output_files)
@@ -284,7 +286,8 @@ def extract_data_model():
         logger.info(f"Extracting Data Model: {settings.data_model_id}")
         
         # Extract metadata
-        result = extractor.extract_from_data_model(settings.data_model_id)
+        pool_identifier = settings.data_pool_id or settings.data_pool_name
+        result = extractor.extract_from_data_model(settings.data_model_id, pool_identifier=pool_identifier)
         
         # Optionally extract actual data
         data_file_path = None
@@ -316,6 +319,7 @@ def extract_data_model():
     try:
         # Save metadata as JSON
         table_dicts = [t.model_dump() for t in result.tables]
+        fk_dicts = [fk.model_dump() for fk in getattr(result, "foreign_keys", [])]
         metadata = {
             "data_model_id": result.data_model_id,
             "data_model_name": result.data_model_name,
@@ -323,8 +327,10 @@ def extract_data_model():
             "total_columns": result.total_columns,
             "total_rows": result.total_rows,
             "tables": table_dicts,
+            "foreign_key_count": len(fk_dicts),
+            "foreign_keys": fk_dicts,
             "extraction_duration": result.duration_seconds,
-            "errors": result.errors
+            "errors": result.errors,
         }
         
         json_path = file_handler.save_json(metadata, "data_model_metadata.json")
@@ -353,10 +359,8 @@ def extract_data_model():
                     f.write(f"  Columns: {table.column_count}\n")
                     f.write(f"  Rows: {table.row_count}\n")
                     if table.columns:
-                        f.write(f"  Fields: {', '.join(table.columns[:10])}")
-                        if len(table.columns) > 10:
-                            f.write(f" + {len(table.columns) - 10} more")
-                        f.write("\n")
+                        # Print all columns (no truncation) for full traceability.
+                        f.write(f"  Fields: {', '.join(table.columns)}\n")
             
             if result.errors:
                 f.write("\n" + "=" * 60 + "\n")
@@ -415,3 +419,5 @@ if __name__ == "__main__":
         main()
         print("\n")
         extract_transformations()
+        print("\n")
+        extract_data_model()

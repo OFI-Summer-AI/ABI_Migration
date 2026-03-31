@@ -121,6 +121,58 @@ def build_paths_from(node: str, graph: Dict[str, List[str]], path: List[str], ou
         build_paths_from(dep, graph, path + [node], out, seen2)
 
 
+def build_paths_as_arrays(start: str, graph: Dict[str, List[str]]) -> List[List[str]]:
+    """
+    Return all dependency paths starting at `start`.
+    Each path is represented as a list of KPI ids: [start, dep1, dep2, ...].
+    """
+    paths: List[List[str]] = []
+
+    def dfs(node: str, path: List[str], seen: Set[str]) -> None:
+        if node in seen:
+            paths.append(path + [f"[CYCLE:{node}]"])
+            return
+        deps = graph.get(node, [])
+        if not deps:
+            paths.append(path + [node])
+            return
+        seen2 = set(seen)
+        seen2.add(node)
+        for dep in deps:
+            dfs(dep, path + [node], seen2)
+
+    dfs(start, [], set())
+    return paths
+
+
+def reachable_deps_in_order(start: str, graph: Dict[str, List[str]]) -> List[str]:
+    """
+    Compute transitive dependencies for `start` (excluding `start`),
+    preserving a stable first-seen order.
+    """
+    seen: Set[str] = set()
+    order: List[str] = []
+    stack = [start]
+    while stack:
+        node = stack.pop()
+        for dep in graph.get(node, []):
+            if dep in seen:
+                continue
+            seen.add(dep)
+            order.append(dep)
+            stack.append(dep)
+    return order
+
+
+def stable_name(kpi_index: Dict[str, Dict[str, Any]], kpi_id: str) -> str:
+    row = kpi_index.get(kpi_id, {}) or {}
+    name = row.get("name")
+    if name is None:
+        return kpi_id
+    name = str(name).strip()
+    return name or kpi_id
+
+
 def invert_graph(graph: Dict[str, List[str]]) -> Dict[str, List[str]]:
     """Reverse adjacency: kpi_id -> [kpis_that_depend_on_it...]"""
     rev: Dict[str, List[str]] = defaultdict(list)
@@ -261,35 +313,60 @@ def main() -> None:
         ]
     )
 
-    # Helpful labels: "KPI Name (kpi_id)"
-    labels = {k: f"{kpi_index[k].get('name', '')} ({k})".strip() for k in chain_graph.keys()}
-
     order, cycles = topo_sort_or_cycles(chain_graph)
+
+    # Helpful labels: "KPI Name (kpi_id)" for DOT output only.
+    labels = {k: f"{stable_name(kpi_index, k)} ({k})".strip() for k in chain_graph.keys()}
 
     # Nodes with no dependencies and nodes depended-on by others
     roots = sorted([k for k, deps in chain_graph.items() if not deps])
     leaves = sorted([k for k in chain_graph.keys() if k not in rev])
 
-    nested_dependency_paths: Dict[str, List[str]] = {}
+    # Human-friendly output objects
+    direct_dependencies = {k: chain_graph.get(k, []) for k in chain_graph.keys()}
+    direct_dependents = {k: rev.get(k, []) for k in chain_graph.keys()}
+
+    nested_kpi_chains: List[Dict[str, Any]] = []
     for nk in nested_kpis:
         if nk not in chain_graph:
             continue
-        paths: List[List[str]] = []
-        build_paths_from(nk, chain_graph, [], paths, set())
-        nested_dependency_paths[nk] = [" -> ".join(p) for p in paths]
+
+        direct_dep = chain_graph.get(nk, [])
+        transitive = reachable_deps_in_order(nk, chain_graph)
+        paths_arrays = build_paths_as_arrays(nk, chain_graph)
+        paths_strings = [" -> ".join(p) for p in (paths_arrays or [])]
+
+        nested_kpi_chains.append(
+            {
+                "kpi_id": nk,
+                "kpi_name": stable_name(kpi_index, nk),
+                "definition_pql": str(kpi_index.get(nk, {}).get("pql_formula", "") or "").strip(),
+                "direct_dependencies": direct_dep,
+                "transitive_dependencies": transitive,
+                "dependency_paths": paths_strings,
+            }
+        )
+
+    edges_list: List[Dict[str, str]] = []
+    for src, deps in chain_graph.items():
+        for dep in deps:
+            edges_list.append({"from": src, "to": dep})
 
     summary = {
-        "total_kpis_in_input": len(graph),
-        "total_kpis_in_dependency_chains": len(chain_graph),
-        "total_edges_in_dependency_chains": sum(len(v) for v in chain_graph.values()),
-        "nested_kpis_direct_format": nested_kpis,
-        "nested_dependency_paths": nested_dependency_paths,
+        "meta": {
+            "total_kpis_in_input": len(graph),
+            "total_kpis_in_dependency_chains": len(chain_graph),
+            "total_edges_in_dependency_chains": sum(len(v) for v in chain_graph.values()),
+            "nested_kpis_direct_format_count": len(nested_kpis),
+        },
+        "nested_kpi_chains": nested_kpi_chains,
+        "direct_dependencies": direct_dependencies,
+        "direct_dependents": direct_dependents,
+        "edges": edges_list,
         "roots_no_dependencies": roots,
         "leaves_no_dependents": leaves,
         "topological_order_partial": order,
         "cycles": cycles,
-        "graph": chain_graph,
-        "dependents": rev,
     }
 
     (out_dir / "kpi_dependency_graph.json").write_text(
@@ -301,9 +378,11 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    print(f"Input KPIs: {summary['total_kpis_in_input']}")
-    print(f"KPIs in dependency chains: {summary['total_kpis_in_dependency_chains']}")
-    print(f"Edges in dependency chains: {summary['total_edges_in_dependency_chains']}")
+    print(f"Input KPIs: {summary['meta']['total_kpis_in_input']}")
+    print(f"KPIs in dependency chains: {summary['meta']['total_kpis_in_dependency_chains']}")
+    print(
+        f"Edges in dependency chains: {summary['meta']['total_edges_in_dependency_chains']}"
+    )
     print(f"Nested KPIs (direct KPI('...') format): {len(nested_kpis)}")
     print(f"Roots (no deps): {len(roots)}")
     print(f"Leaves (no dependents): {len(leaves)}")

@@ -20,7 +20,8 @@ def load_json_rows(path: Path) -> List[Dict[str, Any]]:
         data = json.load(file)
     if not isinstance(data, list):
         raise ValueError("Input JSON must be a list of KPI objects.")
-    return data
+    # Only KPIs should be translated to SQL; ignore Attributes/Filters if present.
+    return [row for row in data if str(row.get("attribute_type", "")).lower() == "kpi"]
 
 
 def save_json_rows(path: Path, data: List[Dict[str, Any]]) -> None:
@@ -56,7 +57,7 @@ def clean_english_explanation(text: str) -> str:
 class SQLTranslator:
     """Translate plain-English KPI explanations into SQL queries."""
 
-    def __init__(self, api_key: str, model_name: str = "openai/gpt-oss-20b"):
+    def __init__(self, api_key: str, model_name: str = "openai/gpt-oss-safeguard-20b"):
         self.llm = ChatGroq(
             model=model_name,
             temperature=0,

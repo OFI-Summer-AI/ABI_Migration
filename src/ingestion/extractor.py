@@ -1,8 +1,17 @@
 import re
 import pandas as pd
-from typing import Any, Optional
+from typing import Any, Optional, List
 from tqdm import tqdm
-from .models import (CelonisKPI, ExtractionResult, CelonisTransformation, TransformationExtractionResult,DataModelTableInfo, DataModelExtractionResult)
+from .models import (
+    CelonisKPI,
+    ExtractionResult,
+    CelonisTransformation,
+    TransformationExtractionResult,
+    DataModelTableInfo,
+    DataModelExtractionResult,
+    DataModelForeignKeyInfo,
+    DataModelForeignKeyColumnMapping,
+)
 from .connectors import CelonisConnector
 from ..utils.logger import get_logger
 
@@ -102,7 +111,13 @@ class CelonisExtractor:
 
         return result
 
-    def extract_from_data_model(self, data_model_id: str, use_chunking: bool = False, chunksize: int = 10000) -> DataModelExtractionResult:
+    def extract_from_data_model(
+        self,
+        data_model_id: str,
+        pool_identifier: str = None,
+        use_chunking: bool = False,
+        chunksize: int = 10000,
+    ) -> DataModelExtractionResult:
         """
         Extract metadata and data from a Celonis Data Model.
         Args:
@@ -114,21 +129,28 @@ class CelonisExtractor:
             DataModelExtractionResult containing metadata and extracted data
         """
         self.logger.info(f"Extracting Data Model: {data_model_id}")
-        
+
+        # Always initialize result so the except block can safely attach errors.
+        result = DataModelExtractionResult(
+            data_model_id=data_model_id,
+            data_model_name="",
+        )
+
         try:
-            # Get data model
-            datamodel = self.connector.get_data_model(data_model_id)
+            # Get data model (via Data Pool in pycelonis)
+            datamodel = self.connector.get_data_model(data_model_id, pool_identifier=pool_identifier)
             self.logger.info(f"Connected to Data Model: {datamodel.name}")
-            
-            # Initialize result
-            result = DataModelExtractionResult(
-                data_model_id=data_model_id,
-                data_model_name=datamodel.name
-            )
+
+            # Fill in name once resolved
+            result.data_model_name = datamodel.name
             
             # Extract table metadata
             self.logger.info("Extracting table metadata...")
             self._extract_table_metadata(datamodel, result)
+
+            # Extract foreign key relationships between tables
+            self.logger.info("Extracting foreign key relationships...")
+            self._extract_foreign_keys(datamodel, result)
             
             result.finalize()
             self.logger.info(f"Data Model extraction complete. Tables: {result.table_count}")
@@ -238,7 +260,9 @@ class CelonisExtractor:
     
     # Helper to build Transformation objects from Celonis job/task entities.
     def _build_transformation(self, job: Any, task: Any) -> CelonisTransformation:
-        sql = self._safe_get_sql(task)
+        # Celonis SDK may return `None` for some tasks (e.g. unsupported/hidden SQL).
+        # Pydantic expects `raw_sql` to be a string, so we must coerce None -> "".
+        sql = self._safe_get_sql(task) or ""
         tables = self._extract_tables(sql)
 
         return CelonisTransformation(
@@ -255,9 +279,12 @@ class CelonisExtractor:
             try:
                 value = getattr(task, attr, None)
                 if callable(value):
-                    return value()
-                elif value:
-                    return value
+                    # `value()` can legitimately return None; coerce to empty string.
+                    result = value()
+                    return "" if result is None else str(result)
+                # Some properties might exist but be None/empty; only accept non-None.
+                if value is not None:
+                    return str(value)
             except Exception:
                 return "[[ HIDDEN OR ERROR ]]"
         return ""
@@ -291,6 +318,66 @@ class CelonisExtractor:
         except Exception as e:
             self.logger.warning(f"Could not extract detailed table metadata: {e}")
             result.errors.append(f"Table metadata extraction: {e}")
+
+    def _extract_foreign_keys(self, datamodel: Any, result: DataModelExtractionResult) -> None:
+        """
+        Extract foreign key relationships between tables in the Celonis data model.
+
+        These relations are required to build a table dependency graph.
+        """
+        try:
+            # Build id -> name mapping for tables so foreign keys can be labeled.
+            tables = self._safe_get_tables(datamodel)
+            table_id_to_name = {}
+            for table in tables:
+                table_id = getattr(table, "id", None) or getattr(table, "object_id", None)
+                table_name = getattr(table, "name", None) or getattr(table, "alias", None) or table_id
+                if table_id:
+                    table_id_to_name[str(table_id)] = str(table_name)
+
+            if not hasattr(datamodel, "get_foreign_keys"):
+                self.logger.info("Data model does not support get_foreign_keys() in this SDK version.")
+                return
+
+            foreign_keys = datamodel.get_foreign_keys()
+            for fk in foreign_keys:
+                fk_id = str(getattr(fk, "id", "") or "")
+                source_table_id = str(getattr(fk, "source_table_id", "") or "")
+                target_table_id = str(getattr(fk, "target_table_id", "") or "")
+
+                # Map ids to names (fallback to ids).
+                source_table_name = table_id_to_name.get(source_table_id, source_table_id)
+                target_table_name = table_id_to_name.get(target_table_id, target_table_id)
+
+                column_mappings: List[DataModelForeignKeyColumnMapping] = []
+                for col in (getattr(fk, "columns", None) or []):
+                    if col is None:
+                        continue
+                    src_col = getattr(col, "source_column_name", None) or getattr(col, "sourceColumnName", None)
+                    tgt_col = getattr(col, "target_column_name", None) or getattr(col, "targetColumnName", None)
+                    if src_col is None or tgt_col is None:
+                        continue
+                    column_mappings.append(
+                        DataModelForeignKeyColumnMapping(
+                            source_column_name=str(src_col),
+                            target_column_name=str(tgt_col),
+                        )
+                    )
+
+                if source_table_id and target_table_id:
+                    result.add_foreign_key(
+                        DataModelForeignKeyInfo(
+                            foreign_key_id=fk_id or f"{source_table_id}->{target_table_id}",
+                            source_table_id=source_table_id,
+                            source_table_name=str(source_table_name),
+                            target_table_id=target_table_id,
+                            target_table_name=str(target_table_name),
+                            column_mappings=column_mappings,
+                        )
+                    )
+        except Exception as e:
+            self.logger.warning(f"Could not extract foreign keys: {e}")
+            result.errors.append(f"Foreign keys extraction: {e}")
     
     def _safe_get_tables(self, datamodel: Any) -> list:
         """

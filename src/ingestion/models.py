@@ -118,6 +118,28 @@ class DataModelTableInfo(BaseModel):
     columns: List[str] = Field(default_factory=list, description="List of column names")
     description: Optional[str] = Field(default="", description="Table description")
     extracted_at: datetime = Field(default_factory=datetime.now, description="Extraction timestamp")
+
+
+class DataModelForeignKeyColumnMapping(BaseModel):
+    """
+    Column mapping for a foreign key: source column -> target column.
+    """
+
+    source_column_name: str = Field(..., description="Source (FK) column name")
+    target_column_name: str = Field(..., description="Target (PK) column name")
+
+
+class DataModelForeignKeyInfo(BaseModel):
+    """
+    Foreign key relationship between two tables in the Celonis data model.
+    """
+
+    foreign_key_id: str = Field(..., description="Foreign key identifier")
+    source_table_id: str = Field(..., description="Source table id")
+    source_table_name: str = Field(..., description="Source table name")
+    target_table_id: str = Field(..., description="Target table id")
+    target_table_name: str = Field(..., description="Target table name")
+    column_mappings: List[DataModelForeignKeyColumnMapping] = Field(default_factory=list)
     
 class Config:
     json_encoders = {
@@ -131,6 +153,7 @@ class DataModelExtractionResult(BaseModel):
     data_model_id: str = Field(..., description="Data model ID")
     data_model_name: str = Field(..., description="Data model name")
     tables: List[DataModelTableInfo] = Field(default_factory=list, description="List of tables")
+    foreign_keys: List[DataModelForeignKeyInfo] = Field(default_factory=list, description="Foreign key relationships")
     table_count: int = Field(default=0, description="Total table count")
     total_rows: int = Field(default=0, description="Total rows extracted")
     total_columns: int = Field(default=0, description="Total columns")
@@ -146,6 +169,10 @@ class DataModelExtractionResult(BaseModel):
         self.total_columns += table_info.column_count
         if table_info.row_count:
             self.total_rows += table_info.row_count
+
+    def add_foreign_key(self, fk_info: DataModelForeignKeyInfo) -> None:
+        """Add foreign key relationship."""
+        self.foreign_keys.append(fk_info)
 
     def finalize(self):
         """Mark extraction as complete."""

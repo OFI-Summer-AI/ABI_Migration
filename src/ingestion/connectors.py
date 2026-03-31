@@ -77,15 +77,51 @@ class CelonisConnector:
         return pool
     
     # Get data model by ID or name.
-    def get_data_model(self, data_model_id: str):
+    # In the pycelonis version used here, data models are accessed via the Data Pool object,
+    # not via `celonis.datamodels`.
+    def get_data_model(self, data_model_id: str, pool_identifier: str = None):
         if not self._celonis:
             self.connect()
         try:
-            # Try to find by ID or name
-            datamodel = self._celonis.datamodels.find(data_model_id)
-            if not datamodel:
-                raise ValueError(f"Data Model '{data_model_id}' not found")
-            return datamodel
+            # If we have a pool id/name, use it (fast path).
+            if pool_identifier:
+                pool = self.get_data_pool(pool_identifier)
+                # Prefer direct getter if available.
+                if hasattr(pool, "get_data_model"):
+                    datamodel = pool.get_data_model(data_model_id)
+                    if datamodel:
+                        return datamodel
+                # Fallback: search within pool.
+                if hasattr(pool, "get_data_models"):
+                    models = pool.get_data_models()
+                    if models:
+                        # Some SDK containers support .find
+                        if hasattr(models, "find"):
+                            datamodel = models.find(data_model_id)
+                            if datamodel:
+                                return datamodel
+                        # Otherwise iterate
+                        for m in models:
+                            if getattr(m, "id", None) == data_model_id or getattr(m, "object_id", None) == data_model_id:
+                                return m
+
+            # Generic fallback: iterate pools and try to locate the model.
+            pools = self._celonis.data_integration.get_data_pools()
+            if pools is not None:
+                if hasattr(pools, "find"):
+                    # If Celonis SDK provides find, still we need pool iteration to search datamodels.
+                    # So we fall back to iteration for safety.
+                    pass
+                for pool in pools:
+                    try:
+                        if hasattr(pool, "get_data_model"):
+                            datamodel = pool.get_data_model(data_model_id)
+                            if datamodel:
+                                return datamodel
+                    except Exception:
+                        continue
+
+            raise ValueError(f"Data Model '{data_model_id}' not found in any Data Pool")
         except Exception as e:
             raise ValueError(f"Failed to get data model '{data_model_id}': {e}")
     
