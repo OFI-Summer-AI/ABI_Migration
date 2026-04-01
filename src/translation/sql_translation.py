@@ -14,13 +14,26 @@ sys.path.insert(0, str(project_root))
 
 from config.settings import get_settings
 
+KPI_CALL_RE = re.compile(r"""(?ix)\bKPI\s*\(\s*(?:"([^"]+)"|'([^']+)')\s*\)""")
+TABLE_COL_RE = re.compile(r'"([^"]+)"\."([^"]+)"')
+
 
 def load_json_rows(path: Path) -> List[Dict[str, Any]]:
     with open(path, "r", encoding="utf-8") as file:
         data = json.load(file)
     if not isinstance(data, list):
         raise ValueError("Input JSON must be a list of KPI objects.")
-    return data
+    return [row for row in data if str(row.get("attribute_type", "")).lower() == "kpi"]
+
+
+def safe_load_json(path: Path) -> Any:
+    try:
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        return None
+    return None
 
 
 def save_json_rows(path: Path, data: List[Dict[str, Any]]) -> None:
@@ -45,12 +58,73 @@ def save_pairs_report_txt(path: Path, pairs: List[Dict[str, Any]]) -> None:
 
 
 def clean_english_explanation(text: str) -> str:
-    """Clean escaped/quoted artifacts before SQL generation prompt."""
+    """Clean noisy artifacts before SQL generation prompt."""
     cleaned = (text or "").strip()
     cleaned = cleaned.replace('\\"', '"')
+    cleaned = cleaned.replace("\n", " ")
+    cleaned = re.sub(r"\{[^}]*\}", " ", cleaned)  # remove unresolved placeholders like {p1}
+    cleaned = re.sub(r"\[\[.*?\]\]", " ", cleaned)  # remove bracketed diagnostics/noise
+    cleaned = re.sub(r"/\*.*?\*/", " ", cleaned)
     cleaned = re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)"', r"\1", cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned
+
+
+def extract_kpi_refs(pql: str) -> List[str]:
+    refs: List[str] = []
+    for m in KPI_CALL_RE.finditer(pql or ""):
+        ref = (m.group(1) or m.group(2) or "").strip()
+        if ref:
+            refs.append(ref)
+    return refs
+
+
+def extract_tables_from_pql(pql: str) -> List[str]:
+    return sorted({t for t, _ in TABLE_COL_RE.findall(pql or "")})
+
+
+def build_sql_context(
+    *,
+    kpi_id: str,
+    pql_formula: str,
+    kpi_dependency_graph: Any,
+    table_dependency_graph: Any,
+    data_model_metadata: Any,
+) -> str:
+    parts: List[str] = []
+
+    refs = extract_kpi_refs(pql_formula)
+    if refs:
+        parts.append(f"KPI references in formula: {refs}")
+
+    if isinstance(kpi_dependency_graph, dict):
+        chains = kpi_dependency_graph.get("nested_kpi_chains") or []
+        chain = next((c for c in chains if c.get("kpi_id") == kpi_id), None)
+        if chain:
+            parts.append(
+                "KPI dependency graph excerpt:\n"
+                f"direct_dependencies: {chain.get('direct_dependencies')}\n"
+                f"transitive_dependencies_count: {len(chain.get('transitive_dependencies') or [])}"
+            )
+
+    ref_tables = set(extract_tables_from_pql(pql_formula))
+    if isinstance(data_model_metadata, dict) and ref_tables:
+        fk_lines: List[str] = []
+        for fk in data_model_metadata.get("foreign_keys") or []:
+            s = fk.get("source_table_name")
+            t = fk.get("target_table_name")
+            if s in ref_tables and t in ref_tables:
+                fk_lines.append(f"{s}->{t}")
+        if fk_lines:
+            parts.append("Relevant foreign keys: " + ", ".join(fk_lines[:20]))
+
+    if isinstance(table_dependency_graph, dict) and ref_tables:
+        edges = table_dependency_graph.get("edges") or []
+        edge_lines = [f"{e.get('from')}->{e.get('to')}" for e in edges if e.get("from") in ref_tables and e.get("to") in ref_tables]
+        if edge_lines:
+            parts.append("Relevant table dependency edges: " + ", ".join(edge_lines[:20]))
+
+    return "\n".join(parts)[:6000]
 
 
 class SQLTranslator:
@@ -63,8 +137,19 @@ class SQLTranslator:
             groq_api_key=api_key,
         )
         self._cache: Dict[str, str] = {}
+        self.usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
-    def to_sql(self, explanation: str, pql_formula: str) -> str:
+    def _record_usage(self, response: Any) -> None:
+        md = getattr(response, "response_metadata", {}) or {}
+        usage = md.get("token_usage") or getattr(response, "usage_metadata", {}) or {}
+        in_t = usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0
+        out_t = usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0
+        tot_t = usage.get("total_tokens", in_t + out_t) or 0
+        self.usage["input_tokens"] += int(in_t)
+        self.usage["output_tokens"] += int(out_t)
+        self.usage["total_tokens"] += int(tot_t)
+
+    def to_sql(self, explanation: str, pql_formula: str, extra_context: str = "") -> str:
         normalized_explanation = clean_english_explanation(explanation)
         normalized_pql = (pql_formula or "").strip()
         if not normalized_explanation and not normalized_pql:
@@ -73,6 +158,12 @@ class SQLTranslator:
         cache_key = f"{normalized_pql}||{normalized_explanation}"
         if cache_key in self._cache:
             return self._cache[cache_key]
+
+        extra_block = (
+            f"Additional dependency/table/model context:\n{extra_context}\n\n"
+            if extra_context
+            else ""
+        )
 
         messages = [
             SystemMessage(
@@ -130,16 +221,18 @@ class SQLTranslator:
             ),
             HumanMessage(
                 content=(
-                    "KPI plain-English explanation (may omit technical details):\n"
+                    f"KPI plain-English explanation (may omit technical details):\n"
                     f"{normalized_explanation}\n\n"
-                    "Original PQL (source of truth for semantics):\n"
+                    f"Original PQL (source of truth for semantics):\n"
                     f"{normalized_pql}\n\n"
-                    "Generate the equivalent SQL SELECT query for this KPI."
+                    f"{extra_block}"
+                    f"Generate the equivalent SQL SELECT query for this KPI."
                 )
             ),
         ]
 
         response = self.llm.invoke(messages)
+        self._record_usage(response)
         content = response.content
         if isinstance(content, list):
             content = " ".join(str(part) for part in content)
@@ -191,14 +284,27 @@ def main() -> None:
     rows = load_json_rows(Path(args.input))
     translator = SQLTranslator(api_key=api_key, model_name=args.model)
 
+    # Optional context artifacts
+    kpi_dep = safe_load_json(project_root / "data" / "processed" / "kpi_dependency_graph" / "kpi_dependency_graph.json")
+    table_dep = safe_load_json(project_root / "data" / "processed" / "table_dependency_graph" / "table_dependency_graph.json")
+    dm_meta = safe_load_json(project_root / "data" / "raw" / "data_model_metadata.json")
+
     pairs: List[Dict[str, Any]] = []
     for idx, row in enumerate(rows, start=1):
         explanation = str(row.get("pql_explanation", "") or "")
         pql_formula = str(row.get("pql_formula", "") or "")
+        kpi_id = str(row.get("kpi_id", "") or "")
         cleaned_explanation = clean_english_explanation(explanation)
         row["pql_explanation_cleaned"] = cleaned_explanation
+        extra_context = build_sql_context(
+            kpi_id=kpi_id,
+            pql_formula=pql_formula,
+            kpi_dependency_graph=kpi_dep,
+            table_dependency_graph=table_dep,
+            data_model_metadata=dm_meta,
+        )
         try:
-            row["sql_query"] = translator.to_sql(cleaned_explanation, pql_formula)
+            row["sql_query"] = translator.to_sql(cleaned_explanation, pql_formula, extra_context=extra_context)
             row["sql_translation_status"] = "success"
         except Exception as exc:
             row["sql_query"] = ""
@@ -229,6 +335,12 @@ def main() -> None:
     save_pairs_report_txt(pairs_txt_path, pairs)
     print(f"Saved PQL->SQL pairs to: {pairs_json_path}")
     print(f"Saved readable report to: {pairs_txt_path}")
+    print(
+        "LLM token usage (SQL translation): "
+        f"input={translator.usage['input_tokens']}, "
+        f"output={translator.usage['output_tokens']}, "
+        f"total={translator.usage['total_tokens']}"
+    )
 
 
 if __name__ == "__main__":

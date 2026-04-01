@@ -246,7 +246,7 @@ class CelonisExtractor:
             transformation_name=task.name,
             sap_tables_used=tables,
             status="Success" if sql else "Empty",
-            raw_sql=sql
+            raw_sql=sql or ""
         )
 
     # Safely attempt to get SQL from a task, handling different possible attributes and errors.
@@ -255,11 +255,13 @@ class CelonisExtractor:
             try:
                 value = getattr(task, attr, None)
                 if callable(value):
-                    return value()
+                    result = value()
+                    if result:
+                        return result
                 elif value:
                     return value
             except Exception:
-                return "[[ HIDDEN OR ERROR ]]"
+                continue
         return ""
 
     # Extract table names from SQL using regex, with handling for hidden/obfuscated SQL.

@@ -118,10 +118,19 @@ def main():
     try:
         # Convert to dicts for serialization
         kpi_dicts = [kpi.model_dump() for kpi in result.kpis]
+        kpis_only = [row for row in kpi_dicts if str(row.get("attribute_type", "")).lower() == "kpi"]
+        filters_only = [row for row in kpi_dicts if str(row.get("attribute_type", "")).lower() == "filter"]
+        attributes_only = [row for row in kpi_dicts if str(row.get("attribute_type", "")).lower() == "attribute"]
         
-        # Save JSON
+        # Save JSON (combined + type-separated for clarity)
         json_path = file_handler.save_json(kpi_dicts, "extracted_kpis.json")
-        logger.info(f"Saved JSON: {json_path}")
+        kpis_path = file_handler.save_json(kpis_only, "extracted_kpis_only.json")
+        filters_path = file_handler.save_json(filters_only, "extracted_filters_only.json")
+        attributes_path = file_handler.save_json(attributes_only, "extracted_attributes_only.json")
+        logger.info(f"Saved JSON (combined): {json_path}")
+        logger.info(f"Saved KPI-only JSON: {kpis_path}")
+        logger.info(f"Saved Filter-only JSON: {filters_path}")
+        logger.info(f"Saved Attribute-only JSON: {attributes_path}")
         
         # Generate report
         stats = {
@@ -133,7 +142,10 @@ def main():
         report_path = file_handler.generate_report(stats)
         
         output_files = {
-            "JSON": json_path,
+            "JSON (Combined)": json_path,
+            "JSON (KPI Only)": kpis_path,
+            "JSON (Filter Only)": filters_path,
+            "JSON (Attribute Only)": attributes_path,
             "Report": report_path
         }
         

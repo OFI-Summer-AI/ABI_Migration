@@ -8,9 +8,9 @@ from typing import Dict, List, Set, Tuple, Any
 
 KPI_CALL_RE = re.compile(r"""(?ix)
 \bKPI\s*\(\s*
-  (?:                          # argument can be:
-    "([^"]+)"                  # - double-quoted id
-    |'([^']+)'                 # - single-quoted id
+  (?:                          
+    "([^"]+)"                  
+    |'([^']+)'                 
   )
 \s*\)
 """)
@@ -229,12 +229,12 @@ def to_dot(graph: Dict[str, List[str]], labels: Dict[str, str]) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build KPI dependency graph from extracted_kpis.json")
+    parser = argparse.ArgumentParser(description="Build KPI dependency graph from extracted KPI file")
     parser.add_argument(
         "--input",
         type=str,
-        default="data/raw/extracted_kpis.json",
-        help="Path to extracted_kpis.json",
+        default="data/raw/extracted_kpis_only.json",
+        help="Path to extracted KPI JSON (default: extracted_kpis_only.json)",
     )
     parser.add_argument(
         "--out-dir",
@@ -245,6 +245,11 @@ def main() -> None:
     args = parser.parse_args()
 
     in_path = Path(args.input)
+    if not in_path.exists() and in_path.name == "extracted_kpis_only.json":
+        # Backward-compatible fallback for older runs where only combined file exists.
+        legacy_path = in_path.parent / "extracted_kpis.json"
+        if legacy_path.exists():
+            in_path = legacy_path
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 

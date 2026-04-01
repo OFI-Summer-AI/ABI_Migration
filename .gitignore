@@ -3,3 +3,7 @@ venv/
 logs/
 __pycache__/
 data/
+dummy.py
+main.py
+error.txt
+test.ipynb
