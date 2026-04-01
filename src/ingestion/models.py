@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
 
+# CelonisKPI class to represent a single KPI or Attribute extracted from Celonis.
 class CelonisKPI(BaseModel):
     """
     Represents a single KPI or Attribute extracted from Celonis.
@@ -54,6 +55,7 @@ class ExtractionResult(BaseModel):
         """Mark extraction as complete."""
         self.completed_at = datetime.now()
     
+    # Calculate extraction duration.
     @property
     def duration_seconds(self) -> float:
         """Calculate extraction duration."""
@@ -83,7 +85,6 @@ class TransformationExtractionResult(BaseModel):
     """
     Container for transformation extraction results with statistics.
     """
-    
     transformations: List[CelonisTransformation] = Field(default_factory=list)
     total_count: int = Field(default=0)
     by_job: Dict[str, int] = Field(default_factory=dict)
@@ -92,6 +93,7 @@ class TransformationExtractionResult(BaseModel):
     started_at: datetime = Field(default_factory=datetime.now)
     completed_at: Optional[datetime] = None
     
+    # Add transformation and update statistics.
     def add_transformation(self, transformation: CelonisTransformation):
         """Add transformation and update statistics."""
         self.transformations.append(transformation)
@@ -103,6 +105,7 @@ class TransformationExtractionResult(BaseModel):
         # Update status count
         self.by_status[transformation.status] = self.by_status.get(transformation.status, 0) + 1
     
+    # Mark extraction as complete.
     def finalize(self):
         """Mark extraction as complete."""
         self.completed_at = datetime.now()

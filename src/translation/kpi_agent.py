@@ -95,6 +95,7 @@ if __name__ == "__main__":
     input_file = base_dir / "data" / "raw" / "extracted_kpis.json"
     output_file = base_dir / "data" / "processed" / "translated_kpis.json"
     
+    # Run the translation
     import traceback
     try:
         translate_kpis(str(input_file), str(output_file))

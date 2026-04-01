@@ -109,6 +109,7 @@ class FileHandler:
         """
         report_file = self.output_dir / f"extraction_report_{self.timestamp}.txt"
         
+        # Write the report
         with open(report_file, "w") as f:
             f.write("=" * 60 + "\n")
             f.write("CELONIS EXTRACTION REPORT\n")
