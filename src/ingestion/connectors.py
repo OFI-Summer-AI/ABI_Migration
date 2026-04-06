@@ -60,7 +60,6 @@ class CelonisConnector:
 
         if not self._celonis:
             self.connect()
-
         # Try lookup by id first (more explicit)
         try:
             pool = self._celonis.data_integration.get_data_pool(pool_identifier)
