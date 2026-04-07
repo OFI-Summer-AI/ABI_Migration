@@ -18,7 +18,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="allow",  # Allow extra fields like groq_api_key
+        extra="allow",  # Allow extra fields from .env
     )
     
     # Celonis Configuration
@@ -31,8 +31,11 @@ class Settings(BaseSettings):
     data_pool_name: Optional[str] = Field(None, description="Data Pool Name")
     data_pool_id: Optional[str] = Field(None, description="Data Pool ID")
     
-    # Groq LLM Configuration (for Agent 2)
-    groq_api_key: Optional[str] = Field(default=None, description="Groq API key for LLM translation")
+    # OpenAI API (PQL explanation + SQL translation via LangChain)
+    openai_api_key: Optional[str] = Field(
+        default=None,
+        description="OpenAI API key (set OPENAI_API_KEY in .env)",
+    )
     
     # Analysis Configuration
     analysis_id: Optional[str] = Field(None, description="Studio View/Analysis ID")

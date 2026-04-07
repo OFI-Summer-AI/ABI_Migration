@@ -313,7 +313,14 @@ class CelonisExtractor:
                 table_info = self._build_table_info(table)
                 if table_info:
                     result.add_table(table_info)
-                    self.logger.info(f"Extracted table: {table_info.table_name} ({table_info.column_count} columns)")
+                    alias_part = (
+                        f", alias={table_info.table_alias!r}"
+                        if table_info.table_alias
+                        else ""
+                    )
+                    self.logger.info(
+                        f"Extracted table: {table_info.table_name}{alias_part} ({table_info.column_count} columns)"
+                    )
         
         except Exception as e:
             self.logger.warning(f"Could not extract detailed table metadata: {e}")
@@ -401,26 +408,47 @@ class CelonisExtractor:
         self.logger.warning("Could not retrieve tables from data model")
         return []
     
+    def _extract_table_alias(self, table: Any) -> Optional[str]:
+        """
+        Celonis UI 'Alias (Optional)' on Data Model table settings.
+        PyCelonis DataModelTable exposes this as ``alias``; some versions use ``alias_or_name``.
+        """
+        val = getattr(table, "alias", None)
+        if val is not None:
+            s = str(val).strip()
+            if s:
+                return s
+        # Transport field: may duplicate name when alias is unset — skip if same as technical name
+        aon = getattr(table, "alias_or_name", None)
+        name = getattr(table, "name", None)
+        if aon is not None and name is not None:
+            aon_s, name_s = str(aon).strip(), str(name).strip()
+            if aon_s and aon_s != name_s:
+                return aon_s
+        return None
+
     def _build_table_info(self, table: Any) -> Optional[DataModelTableInfo]:
         """
         Build DataModelTableInfo from a table object.
         """
         try:
             table_name = getattr(table, "name", getattr(table, "id", "Unknown"))
-            
+            table_alias = self._extract_table_alias(table)
+
             # Try to get columns
             columns = self._safe_get_columns(table)
             column_count = len(columns)
-            
+
             # Try to get row count
             row_count = self._safe_get_row_count(table)
-            
+
             return DataModelTableInfo(
                 table_name=str(table_name),
+                table_alias=table_alias,
                 column_count=column_count,
                 row_count=row_count,
                 columns=columns,
-                description=str(getattr(table, "description", ""))
+                description=str(getattr(table, "description", "")),
             )
         except Exception as e:
             self.logger.warning(f"Failed to build table info: {e}")

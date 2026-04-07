@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 
@@ -71,8 +71,7 @@ def build_rich_dependency_context(
     """
     Build a compact context string for nested KPI translation.
 
-    To avoid token overload, this function filters the large JSON artifacts down to the
-    referenced tables/columns and the relevant edges.
+    To avoid token overload, this function filters the large JSON artifacts down to the referenced tables/columns and the relevant edges.
     """
     parts: List[str] = []
     if dependency_context.strip():
@@ -162,24 +161,19 @@ def build_rich_dependency_context(
 class PQLExplainer:
     """Translate PQL formulas into plain-English business explanations."""
 
-    def __init__(self, api_key: str, model_name: str = "openai/gpt-oss-safeguard-20b"):
-        self.llm = ChatGroq(
+    def __init__(self, api_key: str, model_name: str = "gpt-4o-mini"):
+        self.llm = ChatOpenAI(
             model=model_name,
             temperature=0,
-            groq_api_key=api_key,
+            api_key=api_key,
         )
         self._cache: Dict[str, str] = {}
 
-    def explain(self, pql_formula: str, dependency_context: str = "") -> str:
-        """Return a concise, plain-English explanation for one PQL formula."""
-        normalized = (pql_formula or "").strip()
-        if not normalized:
-            return "No PQL formula available."
-
-        cache_key = f"{normalized}||{dependency_context.strip()}"
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-
+    def _extract_semantics(self, source_pql: str, dependency_context: str = "") -> Dict[str, Any]:
+        """
+        Step 1: Ask the LLM for structured semantic extraction in strict JSON.
+        This reduces hallucination for nested KPI formulas.
+        """
         dependency_block = (
             f"Dependency context (for nested KPI resolution):\n{dependency_context}\n\n"
             if dependency_context
@@ -189,20 +183,25 @@ class PQLExplainer:
         messages = [
             SystemMessage(
                 content=(
-                    "You explain Celonis PQL formulas in plain English for business users. "
-                    "Return exactly one sentence. "
-                    "Be explicit about operation (sum/count/avg/etc), table, and column names. "
-                    "Do not include markdown, bullets, or code fences."
+                    "You are a precise Celonis PQL semantic parser.\n"
+                    "Return valid JSON only, no markdown.\n"
+                    "Use the provided PQL as the source of truth; do not invent logic.\n"
+                    "If nested KPI context exists, use it only to disambiguate.\n"
+                    "Required JSON keys:\n"
+                    "- operation_summary: string\n"
+                    "- measures: array of strings\n"
+                    "- filters: array of strings\n"
+                    "- grouping_grain: string\n"
+                    "- referenced_tables: array of strings\n"
+                    "- referenced_columns: array of strings\n"
+                    "- caveats: array of strings\n"
                 )
             ),
             HumanMessage(
                 content=(
-                    f'PQL: {normalized}\n\n'
+                    f"PQL:\n{source_pql}\n\n"
                     f"{dependency_block}"
-                    "Example style:\n"
-                    'Input: SUM("Book"."PageCount")\n'
-                    'Output: Calculate the total sum of the "PageCount" column from the "Book" table.\n\n'
-                    "Now explain the given PQL."
+                    "Extract the semantics now."
                 )
             ),
         ]
@@ -211,10 +210,97 @@ class PQLExplainer:
         content = response.content
         if isinstance(content, list):
             content = " ".join(str(part) for part in content)
+        text = str(content).strip()
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
 
-        explanation = str(content).strip().replace("\n", " ")
+        # Conservative fallback if JSON parse fails.
+        return {
+            "operation_summary": "Could not reliably parse structured semantics from model output.",
+            "measures": [],
+            "filters": [],
+            "grouping_grain": "Unknown",
+            "referenced_tables": [],
+            "referenced_columns": [],
+            "caveats": ["Model returned non-JSON output during semantic extraction."],
+        }
+
+    def _render_explanation(
+        self,
+        *,
+        raw_pql: str,
+        source_pql: str,
+        structured_semantics: Dict[str, Any],
+        is_nested: bool,
+        dependency_context: str = "",
+    ) -> str:
+        """
+        Step 2: Render a business-readable explanation from structured semantics.
+        Allows 1-3 sentences for complex nested KPIs.
+        """
+        dependency_block = (
+            f"Dependency context (for nested KPI resolution):\n{dependency_context}\n\n"
+            if dependency_context
+            else ""
+        )
+
+        messages = [
+            SystemMessage(
+                content=(
+                    "You explain Celonis KPIs for business and analytics users.\n"
+                    "Output plain text only (no markdown).\n"
+                    "Write 1 to 3 concise sentences.\n"
+                    "Be explicit about operation, key filters, and tables/columns when present.\n"
+                    "For nested KPIs, treat expanded PQL as semantic source of truth.\n"
+                    "Do not invent joins, tables, columns, or business rules.\n"
+                    "If semantics are uncertain, state uncertainty briefly in the final sentence."
+                )
+            ),
+            HumanMessage(
+                content=(
+                    f"Raw PQL:\n{raw_pql}\n\n"
+                    f"Source PQL used for semantics:\n{source_pql}\n\n"
+                    f"Is nested KPI: {is_nested}\n\n"
+                    f"Structured semantics JSON:\n{json.dumps(structured_semantics, ensure_ascii=False)}\n\n"
+                    f"{dependency_block}"
+                    "Now produce the final explanation."
+                )
+            ),
+        ]
+
+        response = self.llm.invoke(messages)
+        content = response.content
+        if isinstance(content, list):
+            content = " ".join(str(part) for part in content)
+        return str(content).strip()
+
+    def explain(self, pql_formula: str, dependency_context: str = "", expanded_pql: str = "") -> str:
+        """Return a concise, plain-English explanation for one PQL formula."""
+        normalized = (pql_formula or "").strip()
+        if not normalized:
+            return "No PQL formula available."
+        normalized_expanded = (expanded_pql or "").strip()
+        source_pql = normalized_expanded or normalized
+        is_nested = bool(normalized_expanded and normalized_expanded != normalized)
+
+        cache_key = f"{normalized}||{normalized_expanded}||{dependency_context.strip()}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        semantics = self._extract_semantics(source_pql=source_pql, dependency_context=dependency_context)
+        explanation = self._render_explanation(
+            raw_pql=normalized,
+            source_pql=source_pql,
+            structured_semantics=semantics,
+            is_nested=is_nested,
+            dependency_context=dependency_context,
+        ).replace("\n", " ")
         explanation = clean_explanation_text(explanation)
-        explanation = normalize_indicator_aggregation_explanation(normalized, explanation)
+        explanation = normalize_indicator_aggregation_explanation(source_pql, explanation)
         self._cache[cache_key] = explanation
         return explanation
 
@@ -444,15 +530,15 @@ def main() -> None:
     parser.add_argument(
         "--model",
         type=str,
-        default="openai/gpt-oss-safeguard-20b",
-        help="Groq model name",
+        default="gpt-4o-mini",
+        help="OpenAI chat model name (e.g. gpt-4o-mini, gpt-4o)",
     )
     args = parser.parse_args()
 
     settings = get_settings()
-    api_key = settings.groq_api_key or os.getenv("GROQ_API_KEY")
+    api_key = settings.openai_api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError("GROQ_API_KEY (or groq_api_key in .env) is required for KPI translation.")
+        raise ValueError("OPENAI_API_KEY (or openai_api_key in .env) is required for KPI translation.")
 
     input_path = Path(args.input)
     output_path = Path(args.output)
@@ -502,7 +588,11 @@ def main() -> None:
                     table_dependency_graph=table_dependency_graph,
                 )
         try:
-            kpi["pql_explanation"] = explainer.explain(pql_formula, dependency_context=dependency_context)
+            kpi["pql_explanation"] = explainer.explain(
+                pql_formula,
+                dependency_context=dependency_context,
+                expanded_pql=expanded,
+            )
         except Exception as exc:
             # Keep processing remaining KPIs; attach a fallback message per failed row.
             kpi["pql_explanation"] = f"Explanation unavailable: {exc}"

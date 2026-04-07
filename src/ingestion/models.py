@@ -112,7 +112,14 @@ class DataModelTableInfo(BaseModel):
     """
     Represents metadata about a table in a data model.
     """
-    table_name: str = Field(..., description="Name of the table")
+    table_name: str = Field(
+        ...,
+        description="Technical / source table name in the data pool (Celonis UI: Name)",
+    )
+    table_alias: Optional[str] = Field(
+        default=None,
+        description="Optional data model alias used in PQL (Celonis UI: Alias). None if unset.",
+    )
     column_count: int = Field(default=0, description="Number of columns")
     row_count: Optional[int] = Field(default=None, description="Number of rows (if available)")
     columns: List[str] = Field(default_factory=list, description="List of column names")

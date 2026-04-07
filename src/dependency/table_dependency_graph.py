@@ -89,12 +89,14 @@ def main() -> None:
     metadata = load_json(in_path)
     edges, adjacency = build_table_edges(metadata)
 
-    # Labels from tables array (best-effort).
+    # Labels: technical name + optional alias (Alias = Databricks / PQL identifier when set).
     labels: Dict[str, str] = {}
     for t in metadata.get("tables") or []:
         name = t.get("table_name")
+        alias = (t.get("table_alias") or "").strip()
         if name:
-            labels[str(name)] = str(name)
+            key = str(name)
+            labels[key] = f"{alias} ← {key}" if alias else key
 
     result = {
         "meta": {

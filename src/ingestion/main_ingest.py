@@ -43,7 +43,8 @@ def print_data_model_results(result: DataModelExtractionResult, output_files: di
     if result.tables:
         print("\nTables extracted:")
         for table in result.tables:
-            print(f"  - {table.table_name}: {table.column_count} columns, {table.row_count} rows")
+            alias_note = f" [alias: {table.table_alias}]" if getattr(table, "table_alias", None) else ""
+            print(f"  - {table.table_name}{alias_note}: {table.column_count} columns, {table.row_count} rows")
     print("-" * 60)
     print("Output Files:")
     for name, path in output_files.items():
@@ -350,12 +351,27 @@ def extract_data_model():
             f.write(f"Total Columns: {result.total_columns}\n")
             f.write(f"Total Rows: {result.total_rows}\n")
             f.write("=" * 60 + "\n")
-            
+            f.write(
+                "\nCONVENTIONS (SQL / Databricks)\n"
+                "- Technical name = Celonis pool table (UI: Name).\n"
+                "- When Alias is set, use it as the table identifier in PQL and in Databricks SQL.\n"
+                "- JOIN keys: foreign_keys in this metadata + table_dependency_graph.json.\n"
+                "- extracted_transformations.json: supplemental patterns only.\n"
+                "- KPI build order: kpi_dependency_graph.json.\n"
+            )
+            f.write("=" * 60 + "\n")
+
             if result.tables:
                 f.write("\nTABLE DETAILS:\n")
                 f.write("-" * 60 + "\n")
                 for table in result.tables:
-                    f.write(f"\nTable: {table.table_name}\n")
+                    f.write(f"\nTable (technical): {table.table_name}\n")
+                    if getattr(table, "table_alias", None):
+                        f.write(
+                            f"  Alias (Databricks / PQL id): {table.table_alias}\n"
+                        )
+                    else:
+                        f.write("  Alias: (not set — use technical name as table id)\n")
                     f.write(f"  Columns: {table.column_count}\n")
                     f.write(f"  Rows: {table.row_count}\n")
                     if table.columns:
@@ -409,7 +425,10 @@ if __name__ == "__main__":
         else:
             print(f"Unknown command: {command}")
             print("\nUsage:")
-            print("  python main.py [--kpis-only|--transformations|--data-model|--all]")
+            print(
+                "  python main_ingest.py [--kpis-only|--transformations|--data-model|--all]\n"
+                "  (from repo root), or: python src/ingestion/main_ingest.py ..."
+            )
             sys.exit(1)
     else:
         # Default: Extract both KPIs and Transformations
