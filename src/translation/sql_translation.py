@@ -150,7 +150,7 @@ SQL_SYSTEM_RULES_SINGLE_PASS = (
     "- Do not invent joins, tables, columns, or business rules not inferable from PQL.\n"
     "\n"
     "IDENTIFIERS, TYPES, AND DIALECT RULES\n"
-    "- Use ANSI-style double quotes for identifiers; never use backticks.\n"
+    "- Do not wrap identifiers in double quotes or backticks in final SQL output.\n"
     "- Keep source identifier names/case faithful to PQL.\n"
     "- Add CAST only when needed to mirror explicit type intent in PQL.\n"
     "- Example mapping: TO_FLOAT(x) -> CAST(x AS FLOAT).\n"
@@ -211,12 +211,26 @@ class SQLTranslator:
         self._cache: Dict[str, str] = {}
 
     @staticmethod
+    def _strip_double_quoted_identifiers(sql: str) -> str:
+        """
+        Remove double quotes around identifier-like tokens while preserving string literals.
+        Examples:
+          "VBRK"."VBELN" -> VBRK.VBELN
+          "VBELN" -> VBELN
+        """
+        out = str(sql or "")
+        out = re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)"\s*\.\s*"([A-Za-z_][A-Za-z0-9_]*)"', r"\1.\2", out)
+        out = re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)"', r"\1", out)
+        return out
+
+    @staticmethod
     def _postprocess_sql(sql: str) -> str:
         sql = str(sql or "").strip()
         sql = re.sub(r"^```sql\s*", "", sql, flags=re.IGNORECASE)
         sql = re.sub(r"^```\s*", "", sql)
         sql = re.sub(r"\s*```$", "", sql)
-        sql = re.sub(r"`([^`]+)`", r'"\1"', sql)
+        sql = re.sub(r"`([^`]+)`", r"\1", sql)
+        sql = SQLTranslator._strip_double_quoted_identifiers(sql)
         sql = re.sub(r";\s*$", "", sql).strip()
         return sql
 
@@ -479,6 +493,13 @@ def main() -> None:
         pql_formula = str(row.get("pql_formula", "") or "")
         cleaned_explanation = clean_english_explanation(explanation)
         row["pql_explanation_cleaned"] = cleaned_explanation
+        expanded_pql = str(row.get("pql_formula_expanded", "") or "").strip()
+        if expanded_pql:
+            cleaned_explanation_for_sql = (
+                f"{cleaned_explanation}\n\nExpanded PQL context:\n{expanded_pql}"
+            ).strip()
+        else:
+            cleaned_explanation_for_sql = cleaned_explanation
 
         kpi_id = str(row.get("kpi_id", "") or "").strip()
         metrics = kpi_sql_complexity_metrics(kpi_id, pql_formula, graph)
@@ -489,7 +510,7 @@ def main() -> None:
         diag: Dict[str, Any] = {}
         try:
             row["sql_query"] = translator.to_sql(
-                cleaned_explanation,
+                cleaned_explanation_for_sql,
                 pql_formula,
                 use_two_pass=metrics["use_two_pass_sql"],
                 diagnostics=diag,
