@@ -65,10 +65,13 @@ def kpi_sql_complexity_metrics(
     known_refs = [r for r in refs if r in graph]
     depth = max_dependency_depth_downstream(kpi_id, graph) if kpi_id in graph else 0
     direct_nested_kpi_count = len(known_refs)
-    use_two_pass = depth >= 2 or direct_nested_kpi_count >= 2
+    # Complex and even moderately nested formulas are much more reliable in two-pass mode.
+    pql_len = len((pql or "").strip())
+    use_two_pass = depth >= 1 or direct_nested_kpi_count >= 1 or pql_len >= 1000
     return {
         "kpi_dependency_depth": depth,
         "direct_nested_kpi_count": direct_nested_kpi_count,
+        "source_pql_length": pql_len,
         "use_two_pass_sql": use_two_pass,
     }
 
@@ -404,10 +407,43 @@ class SQLTranslator:
             diagnostics["from_cache"] = False
 
         if not use_two_pass:
+            # First try a fast single-pass translation.
             sql = self._single_pass_to_sql(normalized_explanation, normalized_pql)
+            single_pass_errs = self._validate_sql(sql, normalized_pql)
+            if single_pass_errs:
+                # Auto-fallback for nested/complex cases where single-pass leaks KPI(...)
+                # or emits invalid SQL shape.
+                if diagnostics is not None:
+                    diagnostics["single_pass_fallback"] = True
+                    diagnostics["single_pass_errors"] = list(single_pass_errs)
+                mode = "two_pass_fallback"
+                plan = self._extract_semantic_plan(normalized_explanation, normalized_pql)
+                validation_notes: List[str] = [f"single_pass: {'; '.join(single_pass_errs)}"]
+                feedback = "\n".join(f"- {e}" for e in single_pass_errs)
+                max_attempts = 3
+                final_ok = False
+                for attempt in range(max_attempts):
+                    sql = self._sql_from_plan(
+                        normalized_explanation,
+                        normalized_pql,
+                        plan,
+                        validation_feedback=feedback,
+                    )
+                    errs = self._validate_sql(sql, normalized_pql)
+                    if not errs:
+                        final_ok = True
+                        break
+                    validation_notes.append(f"attempt {attempt + 1}: " + "; ".join(errs))
+                    feedback = "\n".join(f"- {e}" for e in errs)
+                self._cache[cache_key] = sql
+                if diagnostics is not None:
+                    diagnostics["sql_translation_mode"] = mode
+                    diagnostics["sql_validation_ok"] = final_ok
+                    diagnostics["sql_validation_notes"] = validation_notes
+                return sql
             self._cache[cache_key] = sql
             if diagnostics is not None:
-                diagnostics["sql_validation_ok"] = len(self._validate_sql(sql, normalized_pql)) == 0
+                diagnostics["sql_validation_ok"] = len(single_pass_errs) == 0
                 diagnostics["sql_validation_notes"] = []
             return sql
 
@@ -494,6 +530,8 @@ def main() -> None:
         cleaned_explanation = clean_english_explanation(explanation)
         row["pql_explanation_cleaned"] = cleaned_explanation
         expanded_pql = str(row.get("pql_formula_expanded", "") or "").strip()
+        source_pql_for_sql = expanded_pql or pql_formula
+        row["sql_source_pql"] = "pql_formula_expanded" if expanded_pql else "pql_formula"
         if expanded_pql:
             cleaned_explanation_for_sql = (
                 f"{cleaned_explanation}\n\nExpanded PQL context:\n{expanded_pql}"
@@ -502,16 +540,17 @@ def main() -> None:
             cleaned_explanation_for_sql = cleaned_explanation
 
         kpi_id = str(row.get("kpi_id", "") or "").strip()
-        metrics = kpi_sql_complexity_metrics(kpi_id, pql_formula, graph)
+        metrics = kpi_sql_complexity_metrics(kpi_id, source_pql_for_sql, graph)
         row["kpi_dependency_depth"] = metrics["kpi_dependency_depth"]
         row["direct_nested_kpi_count"] = metrics["direct_nested_kpi_count"]
+        row["source_pql_length"] = metrics["source_pql_length"]
         row["use_two_pass_sql"] = metrics["use_two_pass_sql"]
 
         diag: Dict[str, Any] = {}
         try:
             row["sql_query"] = translator.to_sql(
                 cleaned_explanation_for_sql,
-                pql_formula,
+                source_pql_for_sql,
                 use_two_pass=metrics["use_two_pass_sql"],
                 diagnostics=diag,
             )

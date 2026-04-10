@@ -1,3 +1,7 @@
+APPROACH 2
+
+#create tables for each kpi and also uses pql explanation and expansion and checked the answers for both
+
 # Ingestion_Layer
 # connector.py -->
 
