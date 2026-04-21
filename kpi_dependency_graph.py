@@ -8,11 +8,10 @@ from typing import Dict, List, Set, Tuple, Any
 
 KPI_CALL_RE = re.compile(r"""(?ix)
 \bKPI\s*\(\s*
-  (?:                          
-    "([^"]+)"                  
-    |'([^']+)'                 
+  (?:
+    "([^"]+)"
+    |'([^']+)'
   )
-\s*\)
 """)
 
 DIRECT_KPI_REF_RE = re.compile(r"""(?ix)
