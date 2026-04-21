@@ -3,28 +3,29 @@ import json
 import os
 import re
 import sys
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
-
-# Add project root to path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.settings import get_settings
 
+# Captures KPI ID from any KPI(...) call, including parameterised forms like KPI("id",{p1},{p2}).
+# The closing ')' is NOT required so that extra parameters don't break the match.
 KPI_CALL_RE = re.compile(r"""(?ix)
 \bKPI\s*\(\s*
   (?:
     "([^"]+)"
     |'([^']+)'
   )
-\s*\)
 """)
 
+# Matches a formula that is ENTIRELY a single KPI("id") call (no extra args).
 DIRECT_KPI_REF_RE = re.compile(r"""(?ix)
 ^\s*KPI\s*\(\s*
   (?:
@@ -33,17 +34,18 @@ DIRECT_KPI_REF_RE = re.compile(r"""(?ix)
   )
 \s*\)\s*$
 """)
+
 TABLE_COL_RE = re.compile(r'"([^"]+)"\."([^"]+)"')
 
 
 class PQLExplainer:
     """Translate PQL formulas into plain-English business explanations."""
 
-    def __init__(self, api_key: str, model_name: str = "openai/gpt-oss-20b"):
-        self.llm = ChatGroq(
+    def __init__(self, api_key: str, model_name: str = "gpt-4o"):
+        self.llm = ChatOpenAI(
             model=model_name,
             temperature=0,
-            groq_api_key=api_key,
+            openai_api_key=api_key,
         )
         self._cache: Dict[str, str] = {}
         self.usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
@@ -69,7 +71,7 @@ class PQLExplainer:
             return self._cache[cache_key]
 
         dependency_block = (
-            f"Dependency context (for nested KPI resolution):\n{dependency_context}\n\n"
+            f"Dependency context (resolved nested KPI formulas):\n{dependency_context}\n\n"
             if dependency_context
             else ""
         )
@@ -85,7 +87,9 @@ class PQLExplainer:
                     "like SUM(CASE WHEN <condition> THEN 1 ELSE 0 END), describe them as "
                     "'count of rows/records meeting the condition' instead of 'sum of 1 and 0'. "
                     "More generally, when CASE emits indicator values (1/0, true/false flags), "
-                    "explain the business intent (count/rate/share of matching records)."
+                    "explain the business intent (count/rate/share of matching records). "
+                    "When the formula references {p1}, {p2} etc., treat those as user-defined "
+                    "filter parameters applied at runtime."
                 )
             ),
             HumanMessage(
@@ -115,20 +119,9 @@ class PQLExplainer:
 
 
 def clean_explanation_text(text: str) -> str:
-    """
-    Remove escaped/quoted identifier artifacts from natural-language output.
-    This only cleans the explanation text; it does NOT change source PQL/SQL.
-    """
     cleaned = text.strip()
-
-    # Convert escaped quotes to normal quotes.
     cleaned = cleaned.replace('\\"', '"')
-
-    # Remove quotes around identifier-like names (table/column names),
-    # e.g. "o_custom_SalesOrder" -> o_custom_SalesOrder.
     cleaned = re.sub(r'"([A-Za-z_][A-Za-z0-9_]*)"', r"\1", cleaned)
-
-    # Normalize repeated spaces produced by replacements.
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     return cleaned
 
@@ -192,6 +185,26 @@ def build_graph(kpi_index: Dict[str, Dict[str, Any]]) -> Dict[str, List[str]]:
     return graph
 
 
+def topo_sort_bottom_up(graph: Dict[str, List[str]]) -> List[str]:
+    """Return KPI IDs in leaf-first topological order (dependencies before dependents).
+    Handles cycles by processing remaining nodes when stuck."""
+    remaining = {n: set(deps) for n, deps in graph.items()}
+    order: List[str] = []
+
+    while remaining:
+        ready = sorted([n for n, deps in remaining.items() if not deps])
+        if not ready:
+            # Cycle: break it by picking the node with fewest remaining deps
+            ready = [min(remaining, key=lambda n: len(remaining[n]))]
+        for n in ready:
+            order.append(n)
+            del remaining[n]
+            for deps in remaining.values():
+                deps.discard(n)
+
+    return order
+
+
 def resolve_formula_with_dependencies(
     kpi_id: str,
     graph: Dict[str, List[str]],
@@ -211,7 +224,7 @@ def resolve_formula_with_dependencies(
     def repl(match: re.Match) -> str:
         ref = (match.group(1) or match.group(2) or "").strip()
         if not ref or ref not in kpi_index:
-            return f"KPI(\"{ref}\")"
+            return f'KPI("{ref}")'
         resolved = resolve_formula_with_dependencies(ref, graph, kpi_index, visiting2)
         return f"({resolved})"
 
@@ -264,7 +277,7 @@ def build_rich_dependency_context(
     if dependency_paths:
         parts.append("Dependency paths:\n- " + "\n- ".join(dependency_paths))
     if expanded_formula:
-        parts.append(f"Expanded PQL:\n{expanded_formula}")
+        parts.append(f"Expanded PQL (KPI references inlined):\n{expanded_formula}")
 
     if isinstance(kpi_dependency_graph, dict):
         chains = kpi_dependency_graph.get("nested_kpi_chains") or []
@@ -289,7 +302,11 @@ def build_rich_dependency_context(
 
     if isinstance(table_dependency_graph, dict) and ref_tables:
         edges = table_dependency_graph.get("edges") or []
-        edge_lines = [f"{e.get('from')}->{e.get('to')}" for e in edges if e.get("from") in ref_tables and e.get("to") in ref_tables]
+        edge_lines = [
+            f"{e.get('from')}->{e.get('to')}"
+            for e in edges
+            if e.get("from") in ref_tables and e.get("to") in ref_tables
+        ]
         if edge_lines:
             parts.append("Relevant table dependency edges: " + ", ".join(edge_lines[:20]))
 
@@ -308,50 +325,65 @@ def main() -> None:
         "--input",
         type=str,
         default=str(project_root / "data" / "raw" / "extracted_kpis_only.json"),
-        help="Path to input KPI JSON file",
     )
     parser.add_argument(
         "--output",
         type=str,
         default=str(project_root / "data" / "raw" / "extracted_kpis_explained.json"),
-        help="Path to output JSON file",
     )
     parser.add_argument(
         "--model",
         type=str,
-        default="openai/gpt-oss-20b",
-        help="Groq model name",
+        default="gpt-4o",
+        help="OpenAI model name (default: gpt-4o)",
     )
     args = parser.parse_args()
 
     settings = get_settings()
-    api_key = settings.groq_api_key or os.getenv("GROQ_API_KEY")
+    api_key = settings.openai_api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError("GROQ_API_KEY (or groq_api_key in .env) is required for KPI translation.")
+        raise ValueError("Set OPENAI_API_KEY in .env before running.")
 
     input_path = Path(args.input)
     output_path = Path(args.output)
 
     kpis = load_kpis(input_path)
-    explainer = PQLExplainer(api_key=api_key, model_name=args.model)
     kpi_index = build_kpi_index(kpis)
     graph = build_graph(kpi_index)
-    kpi_dep = safe_load_json(project_root / "data" / "processed" / "kpi_dependency_graph" / "kpi_dependency_graph.json")
-    table_dep = safe_load_json(project_root / "data" / "processed" / "table_dependency_graph" / "table_dependency_graph.json")
+
+    # Process in topological order so dependency context is fully resolved
+    # before we explain a KPI that depends on others.
+    topo_order = topo_sort_bottom_up(graph)
+    kpi_order_map = {kpi_id: i for i, kpi_id in enumerate(topo_order)}
+    kpis_sorted = sorted(
+        kpis,
+        key=lambda row: kpi_order_map.get(str(row.get("kpi_id", "") or ""), 999999),
+    )
+
+    kpi_dep = safe_load_json(
+        project_root / "data" / "processed" / "kpi_dependency_graph" / "kpi_dependency_graph.json"
+    )
+    table_dep = safe_load_json(
+        project_root / "data" / "processed" / "table_dependency_graph" / "table_dependency_graph.json"
+    )
     dm_meta = safe_load_json(project_root / "data" / "raw" / "data_model_metadata.json")
 
-    for idx, kpi in enumerate(kpis, start=1):
+    explainer = PQLExplainer(api_key=api_key, model_name=args.model)
+
+    for idx, kpi in enumerate(kpis_sorted, start=1):
         pql_formula = str(kpi.get("pql_formula", "") or "")
         kpi_id = str(kpi.get("kpi_id", "") or "")
-        direct_nested_ref = extract_direct_nested_ref(pql_formula)
 
+        # Expand for ALL KPIs that have any dependencies (not just pure-delegation ones).
+        deps = graph.get(kpi_id, [])
         paths: List[str] = []
         expanded = ""
-        if direct_nested_ref and kpi_id in graph:
+        if deps:
             paths = build_dependency_paths(kpi_id, graph)
             expanded = resolve_formula_with_dependencies(kpi_id, graph, kpi_index, set())
             kpi["dependency_paths"] = paths
             kpi["pql_formula_expanded"] = expanded
+
         dependency_context = build_rich_dependency_context(
             kpi_id=kpi_id,
             pql_formula=pql_formula,
@@ -364,12 +396,16 @@ def main() -> None:
         try:
             kpi["pql_explanation"] = explainer.explain(pql_formula, dependency_context=dependency_context)
         except Exception as exc:
-            # Keep processing remaining KPIs; attach a fallback message per failed row.
             kpi["pql_explanation"] = f"Explanation unavailable: {exc}"
-        if idx % 25 == 0:
-            print(f"Processed {idx}/{len(kpis)} KPIs...")
 
-    save_kpis(output_path, kpis)
+        if idx % 25 == 0:
+            print(f"Processed {idx}/{len(kpis_sorted)} KPIs...")
+
+    # Restore original order for output (sorted by original list position).
+    original_order = {str(row.get("kpi_id", "")): i for i, row in enumerate(kpis)}
+    kpis_sorted.sort(key=lambda row: original_order.get(str(row.get("kpi_id", "") or ""), 999999))
+
+    save_kpis(output_path, kpis_sorted)
     print(f"Saved explained KPIs to: {output_path}")
     print(
         "LLM token usage (semantic translation): "

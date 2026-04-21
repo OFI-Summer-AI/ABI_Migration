@@ -31,8 +31,11 @@ class Settings(BaseSettings):
     data_pool_name: Optional[str] = Field(None, description="Data Pool Name")
     data_pool_id: Optional[str] = Field(None, description="Data Pool ID")
     
-    # Groq LLM Configuration (for Agent 2)
+    # Groq LLM Configuration (legacy)
     groq_api_key: Optional[str] = Field(default=None, description="Groq API key for LLM translation")
+
+    # OpenAI Configuration
+    openai_api_key: Optional[str] = Field(default=None, description="OpenAI API key for PQL translation")
     
     # Analysis Configuration
     analysis_id: Optional[str] = Field(None, description="Studio View/Analysis ID")
